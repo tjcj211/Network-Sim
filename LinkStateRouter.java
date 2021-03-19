@@ -1,8 +1,8 @@
 /***************
  * LinkStateRouter
  * Author: Christian Duncan
- * Modified by: 
- * Represents a router that uses a Distance Vector Routing algorithm.
+ * Modified by: Charles Rescsanski, 
+ * Represents a router that uses a Link State Routing algorithm.
  ***************/
 import java.util.ArrayList;
 
@@ -12,6 +12,11 @@ public class LinkStateRouter extends Router {
         public Router createRouter(int id, NetworkInterface nic) {
             return new LinkStateRouter(id, nic);
         }
+    }
+
+    //represents an LSP
+    public static class LSP {
+        
     }
 
     Debug debug;
