@@ -1,5 +1,5 @@
 public class Main {
-    public static String NETWORK_FILE = "testGraph.txt";
+    public static String NETWORK_FILE = "testGraph.gqu";
     
     public static void main(String[] args) {
         String networkFile = NETWORK_FILE;
