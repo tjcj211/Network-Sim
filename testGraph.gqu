@@ -1,0 +1,30 @@
+# An example Network file with a bit of descriptions
+# Comments begin with # and continue to end of line.
+5 9 # 5 Nodes and 9 Edges
+# Nodes: ID PROB MEAN_DOWN STD_DOWN
+#   ID is a simple integer
+#   PROB is probability 0-1 that machine fails every second (usually low but here we'll have it more frequent)
+#   MEAN_DOWN is mean downtime (in seconds) one a node fails
+#   STD_DOWN is the standard deviation of this failure
+#   Down time - when it occurs will be a roughly Gaussian distribution with given mean and standard deviation
+163 0.01 10 2
+223 0.02 5 3
+121 0.001 30 1
+189 0.004 5 1
+12 0.12 8 0.1
+# Edges: IDA IDB MEAN_SPEED STD_SPEED
+#      IDA is ID of the source of transmission
+#      IDB is ID of the destination of transmission
+#      MEAN_SPEED is the average time it takes to transmit a message from A to B
+#      STD_SPEED is the standard deviation of the speed
+#      The transmission time will be a roughly Gaussian distribution with given mean and standard deviation
+#      when both machines are up of course
+163 223 7 2
+163 121 7 2
+163 12 7 2
+12 163 8 0.1
+223 189 9 1.2
+223 12 8 0.6
+121 12 5 3
+189 121 10 1
+121 189 10 1
