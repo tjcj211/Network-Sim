@@ -4,8 +4,11 @@
  * Modified by: Charles Rescsanski, 
  * Represents a router that uses a Link State Routing algorithm.
  ***************/
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.TreeSet;
 
 public class LinkStateRouter extends Router {
     // A generator for the given LinkStateRouter class
@@ -42,13 +45,13 @@ public class LinkStateRouter extends Router {
     }
 
     //a type of packet designed for each router to learn its own neighborhood
-    public static class learnReplyPacket
+    public static class LearnReplyPacket
     {
         int sender; //the router that is replying to the neighbor's request for information
         int dest; //the router requesting the information
         int name; //the ID (or nsap) of the neighbor
 
-        public learnReplyPacket(int sender, int dest, int name) 
+        public LearnReplyPacket(int sender, int dest, int name) 
         {
             this.sender = sender;
             this.dest = dest;
@@ -58,11 +61,11 @@ public class LinkStateRouter extends Router {
     } 
 
     //a type of packet used to request the names (or unique IDs) of all neighboring routers
-    public static class helloPacket{
+    public static class HelloPacket{
         int sender; //the router that is requesting information about a neighbor
         int dest; //the router supplying the information
 
-        public helloPacket(int sender, int dest)
+        public HelloPacket(int sender, int dest)
         {
             this.sender = sender;
             this.dest = dest;
@@ -70,11 +73,11 @@ public class LinkStateRouter extends Router {
     }
 
     //a special type of packet used to determine edge weights (to neighbors)
-    public static class echoPacket{
+    public static class EchoPacket{
         int sender;
         int dest;
 
-        public echoPacket(int sender, int dest)
+        public EchoPacket(int sender, int dest)
         {
             this.sender = sender;
             this.dest = dest;
@@ -83,14 +86,14 @@ public class LinkStateRouter extends Router {
     }
 
     //these cannot be sent out until the router has a topology of the entire network
-    public static class dijkstraPacket{
+    public static class DijkstraPacket{
         int finalDest; //the intended recipient of message
         int source; //the originator of the message
         int[] shortestPath;  //the "shortest" sequence of nodes from the source to the destination
         int progress; //corresponds to current index position in the calculated path
         Object payload;  //the message to send
 
-        public dijkstraPacket(int finalDest, int source, int[] shortestPath, int progress, Object payload)
+        public DijkstraPacket(int finalDest, int source, int[] shortestPath, int progress, Object payload)
         {
             this.finalDest = finalDest;
             this.source = source;
@@ -100,11 +103,29 @@ public class LinkStateRouter extends Router {
         }
     }
 
+    //Represents a transmission to send later (once network graph is determined)
+    public static class TransmitRequest{
+        Object payload;
+        int dest;
+
+        public TransmitRequest(Object payload, int dest)
+        {
+            this.payload = payload;
+            this.dest = dest;
+        }
+
+    }
+
     Debug debug;
-    
+    Object fullNetworkGraph; //represents the full graph of the entire network
+    ArrayDeque<TransmitRequest> toSendList; //a queue of payloads to send out with a destination 
+    HashMap<Integer, TreeSet<Integer>> lspHistory;
+
     public LinkStateRouter(int nsap, NetworkInterface nic) {
         super(nsap, nic);
         debug = Debug.getInstance();  // For debugging!
+        this.toSendList = new ArrayDeque<TransmitRequest>();
+        this.lspHistory = new HashMap<Integer, TreeSet<Integer>>();
     }
 
     public void run() {
@@ -112,10 +133,33 @@ public class LinkStateRouter extends Router {
             // See if there is anything to process
             boolean process = false;
             NetworkInterface.TransmitPair toSend = nic.getTransmit();
+           
+            //First, let's route existing packets in the queue
+            if (fullNetworkGraph != null)
+            {
+                process = true;
+                for (TransmitRequest t : this.toSendList)
+                {
+                    int[] shortestPath = dijkstraAlg(t.dest);
+                    dijkstraRoute(new DijkstraPacket(t.dest, nsap, shortestPath, 1, t.payload));
+                }
+                
+            }
             if (toSend != null) {
                 // There is something to send out
                 process = true;
                 debug.println(3, "(LinkStateRouter.run): I am being asked to transmit: " + toSend.data + " to the destination: " + toSend.destination);
+                if (fullNetworkGraph != null)
+                {
+                    int[] shortestPath = dijkstraAlg(toSend.destination);
+                    dijkstraRoute(new DijkstraPacket(toSend.destination, nsap, shortestPath, 1, toSend.data));
+                }
+                //payloads cannot be sent until the router has built a graph of the entire network
+                //we'll store them temporarily in a queue to transmit later
+                else
+                {
+                    this.toSendList.add(new TransmitRequest(toSend.data, toSend.destination));
+                }
             }
 
             NetworkInterface.ReceivePair toRoute = nic.getReceived();
@@ -123,6 +167,44 @@ public class LinkStateRouter extends Router {
                 // There is something to route through - or it might have arrived at destination
                 process = true;
                 debug.println(3, "(LinkStateRouter.run): I am being asked to transmit: " + toSend.data + " to the destination: " + toSend.destination);
+                
+                // We need to first determine which type of packet has been received.  
+                if (toRoute.data instanceof DijkstraPacket)
+                {
+                    //in this case, we have an actual packet (not used for learning the network)
+                    DijkstraPacket p = (DijkstraPacket) toRoute.data;
+                    p.progress ++; //advance the progress index to next node in the path
+                    dijkstraRoute(p);                    
+                }
+                else if (toRoute.data instanceof LSP)
+                {
+                    LSP p = (LSP) toRoute.data;
+                    //This may be an old or duplicate packet, so we shouldn't flood it immediately.
+                    //1.  Discard if:
+                        //a) it's a duplicate (identical sequence number - originator combination)
+                        //b) if its sequence number is lower than the highest one seen from the originating router.
+                    if (this.lspHistory.containsKey(toRoute.originator))
+                    {
+                        //adds sequence number; checks if it's a duplicate
+                        if (this.lspHistory.get(toRoute.originator).add(p.sequence))
+                        {
+                            //checks whether sequence number is lower than the highest one seen
+                            if (p.sequence < this.lspHistory.get(toRoute.originator).last())
+                            {
+                                lspRoute(toRoute.originator, p);
+                            }
+                        }
+                    }
+                    else 
+                    {
+                        //we've never received an LSP packet of this router's neighborhood
+                        TreeSet<Integer> list = new TreeSet<Integer>();
+                        list.add(p.sequence);
+                        this.lspHistory.put(toRoute.originator, list);
+                        lspRoute(toRoute.originator, p);
+                    }
+                }
+            
             }
 
             if (!process) {
@@ -130,5 +212,40 @@ public class LinkStateRouter extends Router {
                 try { Thread.sleep(1); } catch (InterruptedException e) { }
             }
         }
+    }
+
+        /** Route the given packet out.
+        In our case, we go to the node specified in the calculated path
+    **/
+    private void dijkstraRoute(DijkstraPacket p) {
+        ArrayList<Integer> outLinks = nic.getOutgoingLinks();
+        int size = outLinks.size();
+        for (int i = 0; i < size; i++) {
+            if (outLinks.get(i) == p.shortestPath[p.progress]) {
+                // Send packet to ONLY the next link in the calculated path
+                nic.sendOnLink(i, p);
+            }
+        }
+    }
+
+      /** Route the given packet out.
+        LSP packets should be flooded
+    **/
+    private void lspRoute(int linkOriginator, LSP p) {
+        ArrayList<Integer> outLinks = nic.getOutgoingLinks();
+        int size = outLinks.size();
+        for (int i = 0; i < size; i++) {
+            if (outLinks.get(i) != linkOriginator) {
+                // Send packet to ONLY the next link in the calculated path
+                nic.sendOnLink(i, p);
+            }
+        }
+    }
+
+    //computes the shortest path from a single source to a given destination using dijkstra's algorithm
+    //requires knowledge of the entire network 
+    private int[] dijkstraAlg(int dest)
+    {
+        return new int[1];
     }
 }
