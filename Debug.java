@@ -18,16 +18,19 @@ public class Debug {
     }
 
     private Debug() {
-        level = 0;  // 0 means no output
+        level = 0;  // 0, lower=less output, so this only outputs very important messages.
         err = System.err;
     }
 
     public int getLevel() { return level; }
     public void setLevel(int level) { this.level = level; }
     public void setStream(PrintStream err) { this.err = err; }
+    public PrintStream getStream() { return this.err; }
     public void println(int level, String message) {
         if (this.level >= level) {
-            err.println("DEBUG (" + level + "): " + message);
+            synchronized (err) {
+                err.println("DEBUG (" + level + "): " + message);
+            }
         }
     }
 }

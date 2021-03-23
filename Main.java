@@ -1,5 +1,5 @@
 public class Main {
-    public static String NETWORK_FILE = "testGraph.txt";
+    public static String NETWORK_FILE = "testGraph.gqu";
     
     public static void main(String[] args) {
         String networkFile = NETWORK_FILE;
@@ -20,10 +20,11 @@ public class Main {
         net.createRouters(new FloodRouter.Generator());
         
         try {
-            net.runNetwork(System.out, 10000, 1, 0.5);
+            net.runNetwork(System.out, 10000, 100);
         } catch (Exception e) {
             System.err.println("Error running the network.");
             System.err.println(e.getMessage());
         }
+        System.exit(0);  // Finished, kill all the threads!
     }
 }
