@@ -8,6 +8,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedList;
+import java.util.Map;
 import java.util.TreeSet;
 
 public class LinkStateRouter extends Router {
@@ -31,12 +32,11 @@ public class LinkStateRouter extends Router {
 
         //the first integer (keys) correspond to ID of given neighbor
         //the second integer (values) represent the edge weight
-        HashMap<Integer, Integer> neighborEdgeWeights; //the costs associated with each neighbor of the owner
+        HashMap<Integer, Long> neighborEdgeWeights; //the costs associated with each neighbor of the owner
 
-        public LSP(int source, int dest, int sequence, int age, HashMap<Integer, Integer> neighborEdgeWeights)
+        public LSP(int source, int sequence, int age, HashMap<Integer, Long> neighborEdgeWeights)
         {
             this.source = source;
-            this.dest = dest; 
             this.sequence = sequence;
             this.age = age;
             this.neighborEdgeWeights = neighborEdgeWeights;
@@ -44,43 +44,15 @@ public class LinkStateRouter extends Router {
 
     }
 
-    //a type of packet designed for each router to learn its own neighborhood
-    public static class LearnReplyPacket
-    {
-        int sender; //the router that is replying to the neighbor's request for information
-        int dest; //the router requesting the information
-        int name; //the ID (or nsap) of the neighbor
-
-        public LearnReplyPacket(int sender, int dest, int name) 
-        {
-            this.sender = sender;
-            this.dest = dest;
-            this.name = name;
-        }
-
-    } 
-
-    //a type of packet used to request the names (or unique IDs) of all neighboring routers
-    public static class HelloPacket{
-        int sender; //the router that is requesting information about a neighbor
-        int dest; //the router supplying the information
-
-        public HelloPacket(int sender, int dest)
-        {
-            this.sender = sender;
-            this.dest = dest;
-        }
-    }
-
     //a special type of packet used to determine edge weights (to neighbors)
     public static class EchoPacket{
-        int sender;
-        int dest;
+        int requester; //the router trying to calculate an edge weight
+        int neighbor;  //the link to which to calculate the cost
 
-        public EchoPacket(int sender, int dest)
+        public EchoPacket(int requester, int neighbor)
         {
-            this.sender = sender;
-            this.dest = dest;
+            this.requester = requester;
+            this.neighbor = neighbor;
         }
 
     }
@@ -121,7 +93,7 @@ public class LinkStateRouter extends Router {
         Long sendTime;
         Long receiveTime;
         
-        public WeightCalc() { }
+        public WeightCalc(Long sendTime) { this.sendTime = sendTime;}
 
         public void setSendTime(long time) {this.sendTime = time;}
         public void setReceiveTime(long time) {this.receiveTime = time;}
@@ -135,32 +107,52 @@ public class LinkStateRouter extends Router {
             return null;  
         }
     }
-
+    LSP myLSP;
+    HashMap<Integer, HashMap<Integer, Long>> linkSet; //stores most current LSPs of each router on the network
+    int sequence; //32 bit sequence number for distributing LSP; increment for every new LSP sent out
     Debug debug;
     Object fullNetworkGraph; //represents the full graph of the entire network
     ArrayDeque<TransmitRequest> toSendList; //a queue of payloads to send out with a destination 
     HashMap<Integer, TreeSet<Integer>> lspHistory; //list of all LSP sequence numbers from each neighbor
                                                    //should periodically remove the ones that have expired
-
-    HashMap<Integer, Integer> neighborNames; //use to store the names of immediate neighbors 
-    HashMap<Integer, WeightCalc> neighborEdgeWeights; //the costs associated with each neighbor of the owner
+    HashMap<Integer, WeightCalc> neighborEdgeCalcs; // used to calculate costs using send and receive time
+    HashMap<Integer, Long> neighborEdgeWeights; //the costs associated with each neighbor of the owner
 
     public LinkStateRouter(int nsap, NetworkInterface nic) {
         super(nsap, nic);
         debug = Debug.getInstance();  // For debugging!
         this.toSendList = new ArrayDeque<TransmitRequest>();
         this.lspHistory = new HashMap<Integer, TreeSet<Integer>>();
-        this.neighborNames = new HashMap<Integer, Integer>();
-        this.neighborEdgeWeights = new HashMap<Integer, WeightCalc>();
+        this.neighborEdgeCalcs = new HashMap<Integer, WeightCalc>();
+        this.neighborEdgeWeights = new HashMap<Integer, Long>();
+        this.linkSet = new HashMap<Integer, HashMap<Integer, Long>>();
+        this.sequence = 0; 
     }
 
     public void run() {
+        //before we enter the loop, let's first send out echo (PING) requests to the neighbors
+        this.echoOut();
+
+
         while (true) {
             // See if there is anything to process
             boolean process = false;
             NetworkInterface.TransmitPair toSend = nic.getTransmit();
+
+            //First, let's build an LSP (if possible)
+            if (this.myLSP == null && this.checkAllWeights_UpdateMaster())
+            {
+                //Yes, all neighbor weights have been calculated, so we can build our LSP packet
+                this.myLSP = new LSP(nsap, this.sequence, 60, this.neighborEdgeWeights);
+
+                //LSP will go to everyone except the direct link from which we just received it.
+                this.lspRoute(-1, this.myLSP); //we'll use the flooding algorithm to distribute LSP
+
+            }
+            
+            //if (this.linkSet.size() == nic.getOutgoingLinks().size())
            
-            //First, let's route existing packets in the queue
+            //Next, let's route existing packets in the queue
             if (fullNetworkGraph != null)
             {
                 process = true;
@@ -174,7 +166,7 @@ public class LinkStateRouter extends Router {
             if (toSend != null) {
                 // There is something to send out
                 process = true;
-                debug.println(3, "(LinkStateRouter.run): I am being asked to transmit: " + toSend.data + " to the destination: " + toSend.destination);
+                debug.println(1, "(LinkStateRouter.run): I am being asked to transmit: " + toSend.data + " to the destination: " + toSend.destination);
                 if (fullNetworkGraph != null)
                 {
                     int[] shortestPath = dijkstraAlg(toSend.destination);
@@ -188,42 +180,10 @@ public class LinkStateRouter extends Router {
                 }
             }
 
-            ArrayList<Integer> outLinks = nic.getOutgoingLinks();
-            if (this.neighborNames.size() < outLinks.size())
-            {
-                //I still have yet to discover the names of all my neighbors
-                for (int i = 0; i < outLinks.size(); i++)
-                {
-                    if (this.neighborNames.get(outLinks.get(i)) == null)
-                    {
-                        //We have yet to send out an echo to this neighbor
-                        this.nic.sendOnLink(i, new HelloPacket(nsap, outLinks.get(i)));
-                        this.neighborNames.put(outLinks.get(i), -1); //
-                    }
-                }
-            }
-            else if (this.neighborEdgeWeights.size() < outLinks.size())
-            {
-                //I still have yet to determine the costs associated with each neighbor
-                for (int i = 0; i < outLinks.size(); i++)
-                {
-                    if (!this.neighborEdgeWeights.containsKey(outLinks.get(i)))
-                    {
-                        //We have yet to send out an echo to this neighbor
-                        WeightCalc calc = new WeightCalc();
-                        this.neighborEdgeWeights.put(outLinks.get(i), calc);
-                        calc.setSendTime(System.currentTimeMillis());
-                        this.nic.sendOnLink(i, new EchoPacket(nsap, outLinks.get(i)));
-                    }
-                }
-
-            }
-
             NetworkInterface.ReceivePair toRoute = nic.getReceived();
             if (toRoute != null) {
                 // There is something to route through - or it might have arrived at destination
                 process = true;
-                debug.println(3, "(LinkStateRouter.run): I am being asked to transmit: " + toSend.data + " to the destination: " + toSend.destination);
                 
                 // We need to first determine which type of packet has been received.  
                 if (toRoute.data instanceof DijkstraPacket)
@@ -232,8 +192,8 @@ public class LinkStateRouter extends Router {
                     DijkstraPacket p = (DijkstraPacket) toRoute.data;
                     if (p.finalDest == nsap) {
                         // It made it!  Inform the "network" for statistics tracking purposes
-                        debug.println(4, "(LinkStateRouter.run): Packet has arrived!  Reporting to the NIC - for accounting purposes!");
-                        debug.println(6, "(LinkStateRouter.run): Payload: " + p.payload);
+                        debug.println(0, "(LinkStateRouter.run): Packet has arrived!  Reporting to the NIC - for accounting purposes!");
+                        debug.println(0, "(LinkStateRouter.run): Payload: " + p.payload);
                         nic.trackArrivals(p.payload);
                     }
                     else  
@@ -255,25 +215,28 @@ public class LinkStateRouter extends Router {
                     
                     if(p.age > 0)
                     {
-                        if (this.lspHistory.containsKey(toRoute.originator))
+                        if (this.lspHistory.containsKey(p.source))
                         {
                             //adds sequence number; checks if it's a duplicate
-                            if (this.lspHistory.get(toRoute.originator).add(p.sequence))
+                            if (this.lspHistory.get(p.source).add(p.sequence))
                             {
                                 //checks whether sequence number is NOT lower than the highest one seen
-                                if (!(p.sequence < this.lspHistory.get(toRoute.originator).last()))
+                                if (!(p.sequence < this.lspHistory.get(p.source).last()))
                                 {
                                     p.age --;
+                                    debug.println(1, "Router " + nsap + " has received an updated LSP from router " + p.source);
+                                    //replace LSP info to our master table
+                                    this.linkSet.put(p.source, p.neighborEdgeWeights);
                                     lspRoute(toRoute.originator, p);
                                 }
                                 else 
                                 {
-                                    debug.println(5, "LSP is outdated.  Dropping LSP from " + p.source + " to " + p.dest + " by router " + nsap);
+                                    debug.println(1, "LSP is outdated.  Dropping LSP from " + p.source + " to " + p.dest + " by router " + nsap);
                                 }
                             }
                             else 
                             {
-                                debug.println(5, "LSP is a duplicate.  Dropping LSP from " + p.source + " to " + p.dest + " by router " + nsap);
+                                debug.println(1, "LSP is a duplicate.  Dropping LSP from " + p.source + " to " + p.dest + " by router " + nsap);
                             }
                         }
                         else 
@@ -282,47 +245,36 @@ public class LinkStateRouter extends Router {
                             TreeSet<Integer> list = new TreeSet<Integer>();
                             list.add(p.sequence);
                             p.age --;
-                            this.lspHistory.put(toRoute.originator, list);
+                            this.lspHistory.put(p.source, list);
+                            debug.println(0, "Router " + nsap + " has received its first LSP from router " + p.source);
+                             //add LSP info to our master table
+                             this.linkSet.put(p.source, p.neighborEdgeWeights);
                             lspRoute(toRoute.originator, p);
                         }
                     }
                     else 
                     {
-                        debug.println(5, "LSP is expired.  Dropping LSP from " + p.source + " to " + p.dest + " by router " + nsap);
+                        debug.println(1, "LSP is expired.  Dropping LSP from " + p.source + " to " + p.dest + " by router " + nsap);
                     }
                 }
                 else if (toRoute.data instanceof EchoPacket)
                 {
                     EchoPacket p = (EchoPacket) toRoute.data;
-                    if (toRoute.originator == nsap)
+                    if (p.requester == nsap)
                     {
-                        if (this.neighborEdgeWeights.containsKey(p.sender))
-                        {
-                            this.neighborEdgeWeights.get(p.sender).setReceiveTime(System.currentTimeMillis());
-                        }
+                        //the echo request has been returned!!!
+                        WeightCalc weCalc = this.neighborEdgeCalcs.get(p.neighbor);
+                        weCalc.setReceiveTime(System.currentTimeMillis());
+
+                        debug.println(0, "Edge weight from (" + nsap + " --> " + p.neighbor + "): " + weCalc.getWeight());
                     }
                     else
                     {
                         //no need to check destination for these because they are on sent by immediate neighbors
-                        debug.println(5, "Transmitting echo back to " + toRoute.originator + " by router " + nsap);
-                        p.sender = nsap;
-                        this.echoRoute(toRoute.originator, p);
+                        debug.println(1, "Neighbor " + nsap + " RETURNS echo to router " + p.requester);
+                        this.returnEcho(p);
                     }
                
-                }
-                else if (toRoute.data instanceof HelloPacket)
-                {
-                    debug.println(5, "HELLO packet has been received.  Sending response back to " + toRoute.originator + " by router " + nsap);
-                    //these are also only sent on point to point lines.
-                    LearnReplyPacket p = new LearnReplyPacket(nsap, toRoute.originator, nsap);
-                    this.nameReplyRoute(toRoute.originator, p);
-                }
-                else if (toRoute.data instanceof LearnReplyPacket)
-                {
-                    LearnReplyPacket p = (LearnReplyPacket) toRoute.data;
-                    debug.println(5, "LearnReply packet has been received from router " + toRoute.originator + " with name: " + p.name);
-                   
-                    this.neighborNames.put(toRoute.originator, p.name);
                 }
                 else 
                 {
@@ -333,10 +285,12 @@ public class LinkStateRouter extends Router {
             
             }
 
+            
             if (!process) {
                 // Didn't do anything, so sleep a bit
                 try { Thread.sleep(1); } catch (InterruptedException e) { }
             }
+            
         }
     }
 
@@ -371,28 +325,43 @@ public class LinkStateRouter extends Router {
           /** Route the given packet out.
         Echo packet should be sent immediately back to source
     **/
-    private void echoRoute(int linkOriginator, EchoPacket p) {
+    private void returnEcho(EchoPacket p) {
         ArrayList<Integer> outLinks = nic.getOutgoingLinks();
         int size = outLinks.size();
         for (int i = 0; i < size; i++) {
-            if (outLinks.get(i) == linkOriginator) {
+            if (outLinks.get(i) == p.requester) {
                 // Send packet to ONLY back to the originator
                 nic.sendOnLink(i, p);
             }
         }
     }
 
-          /** Route the given packet out.
-        Reply packet should be sent immediately back to source
-    **/
-    private void nameReplyRoute(int linkOriginator, LearnReplyPacket p) {
+    //checks whether the router has a calculated weight value for all neighbors
+    //also updates the HashMap to send out on our LSP that only has the weights 
+    private Boolean checkAllWeights_UpdateMaster()
+    {
+        for (Map.Entry<Integer, WeightCalc> pair : this.neighborEdgeCalcs.entrySet())
+        {
+            if (pair.getValue().getWeight() == null)
+            {
+                return false;
+            }
+            else 
+            {
+                this.neighborEdgeWeights.put(pair.getKey(), pair.getValue().getWeight());
+            }
+        }
+       return true;
+    }
+
+    private void echoOut() {
         ArrayList<Integer> outLinks = nic.getOutgoingLinks();
         int size = outLinks.size();
         for (int i = 0; i < size; i++) {
-            if (outLinks.get(i) == linkOriginator) {
-                // Send packet to ONLY back to the originator
+                EchoPacket p = new EchoPacket(this.nsap, outLinks.get(i));
+                this.neighborEdgeCalcs.put(outLinks.get(i), new WeightCalc(System.currentTimeMillis()));
+                debug.println(1, "Router " + nsap + " SENDS echo to neighbor " + p.neighbor);
                 nic.sendOnLink(i, p);
-            }
         }
     }
 
