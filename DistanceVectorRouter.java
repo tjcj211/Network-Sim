@@ -5,6 +5,7 @@
  * Represents a router that uses a Distance Vector Routing algorithm.
  ***************/
 import java.util.ArrayList;
+import java.util.HashMap;
 
 public class DistanceVectorRouter extends Router {
     // A generator for the given DistanceVectorRouter class
@@ -15,13 +16,12 @@ public class DistanceVectorRouter extends Router {
     }
 
     Debug debug;
-    int [][] routingTable; // Stores all connections and their costs
-    int networkSize; // How many routers are there in the network
+    private HashMap<Integer,Integer> routingTable; // Stores all connections and their costs
     
     public DistanceVectorRouter(int nsap, NetworkInterface nic) {
         super(nsap, nic);
         debug = Debug.getInstance();  // For debugging!
-        initializeRoutingTable(); 
+        initializeRoutingTable(nsap, nic); 
     }
 
     public void run() {
@@ -50,14 +50,11 @@ public class DistanceVectorRouter extends Router {
     }
 
     //Set distance to self to 0 and all other connections to maxInt
-    private void initializeRoutingTable() {
-        networkSize = 10; 
-        routingTable = new int[networkSize][networkSize];
-        routingTable[0][0] = 0; // Distance to self is 0
-        for (int x = 1; x <= networkSize; x++) {
-            for (int y = 1; y <= networkSize; y++) {
-                routingTable[x][y] = Integer.MAX_VALUE; // Distance to all other routers is 'infinity'
-            }
+    private void initializeRoutingTable(int nsap, NetworkInterface nic) {
+        routingTable.put(nsap, 0);
+        ArrayList<Integer> out = nic.getOutgoingLinks();
+        for (int i = 0; i <= out.size(); i++) {
+            routingTable.put(out.get(i), Integer.MAX_VALUE); //initializes every connection distance to max_value
         }
     }
 }
