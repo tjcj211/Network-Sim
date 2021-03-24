@@ -38,6 +38,7 @@ public class DistanceVectorRouter extends Router {
             NetworkInterface.ReceivePair toRoute = nic.getReceived();
             if (toRoute != null) {
                 // There is something to route through - or it might have arrived at destination
+
                 process = true;
                 debug.println(3, "(DistanceVectorRouter.run): I am being asked to transmit: " + toSend.data + " to the destination: " + toSend.destination);
             }
@@ -56,6 +57,10 @@ public class DistanceVectorRouter extends Router {
         for (int i = 0; i <= out.size(); i++) {
             routingTable.put(out.get(i), Integer.MAX_VALUE); //initializes every connection distance to max_value
         }
+    }
+
+    public HashMap<Integer, Integer> getRoutingTable(){
+        return routingTable;
     }
 }
 
