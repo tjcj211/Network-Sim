@@ -15,10 +15,13 @@ public class DistanceVectorRouter extends Router {
     }
 
     Debug debug;
+    int [][] routingTable; // Stores all connections and their costs
+    int networkSize; // How many routers are there in the network
     
     public DistanceVectorRouter(int nsap, NetworkInterface nic) {
         super(nsap, nic);
         debug = Debug.getInstance();  // For debugging!
+        initializeRoutingTable(); 
     }
 
     public void run() {
@@ -42,6 +45,18 @@ public class DistanceVectorRouter extends Router {
             if (!process) {
                 // Didn't do anything, so sleep a bit
                 try { Thread.sleep(1); } catch (InterruptedException e) { }
+            }
+        }
+    }
+
+    //Set distance to self to 0 and all other connections to maxInt
+    private void initializeRoutingTable() {
+        networkSize = 10; 
+        routingTable = new int[networkSize][networkSize];
+        routingTable[0][0] = 0; // Distance to self is 0
+        for (int x = 1; x <= networkSize; x++) {
+            for (int y = 1; y <= networkSize; y++) {
+                routingTable[x][y] = Integer.MAX_VALUE; // Distance to all other routers is 'infinity'
             }
         }
     }
