@@ -69,7 +69,7 @@ public class DistanceVectorRouter extends Router {
                     Packet p = (Packet) toRoute.data;
                     //For each recieved if has different table, update own table
                     if ((Boolean) p.payload[0]){ //Is flagged as a DV
-                    	if ((int) p.payload[1] != routingTable.get(p.source) {
+                    	if ((int) p.payload[1] != routingTable.get(p.source)) {
                     		routingTable.put(p.source, (int) p.payload[1]);
                     	}
                     }
@@ -85,7 +85,7 @@ public class DistanceVectorRouter extends Router {
                         // Still more routing to do
                         p.hopCount--;
                         Object[] payload = {false, toRoute.data};
-                        route(-1, new Packet(toRoute.source, toRoute.destination, p.hopCount, payload));
+                        route(-1, new Packet(p.source, p.dest, p.hopCount, payload));
                         
                     } else {
                         debug.println(5, "Packet has too many hops.  Dropping packet from " + p.source + " to " + p.dest + " by router " + nsap);
