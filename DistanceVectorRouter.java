@@ -15,6 +15,21 @@ public class DistanceVectorRouter extends Router {
         }
     }
 
+    public static class Packet {
+        // This is how we will store our Packet Header information
+        int source;
+        int dest;
+        int hopCount;  // Maximum hops to get there
+        Object[] payload;  // The payload!
+        
+        public Packet(int source, int dest, int hopCount, Object[] payload) {
+            this.source = source;
+            this.dest = dest;
+            this.hopCount = hopCount;
+            this.payload = payload;
+        }
+    }
+
     Debug debug;
     private HashMap<Integer,Integer> routingTable; // Stores all connections and their costs
     
@@ -32,14 +47,48 @@ public class DistanceVectorRouter extends Router {
             if (toSend != null) {
                 // There is something to send out
                 process = true;
+                // Send DV to all neighbors if some conditions are met
+                if () { // Changes found or router has been dropped
+                    Object[] payload = {true, /*[DISTANCE VECTOR]*/};
+                    route(-1, new Packet(nsap, toSend.destination, 1, payload));
+
+                } else { // No changes found or no routers dropped
+                    Object[] payload = {false, toSend.data};
+                    route(-1, new Packet(nsap, toSend.destination, 5, payload));
+                }
+                
+
                 debug.println(3, "(DistanceVectorRouter.run): I am being asked to transmit: " + toSend.data + " to the destination: " + toSend.destination);
             }
 
             NetworkInterface.ReceivePair toRoute = nic.getReceived();
             if (toRoute != null) {
                 // There is something to route through - or it might have arrived at destination
-
                 process = true;
+                if (toRoute.data instanceof Packet) {
+                    Packet p = (Packet) toRoute.data;
+                    //For each recieved if has different table, update own table
+                    if ((Boolean) p.payload[0]){ //Is flagged as a DV
+
+                    }
+
+                    //If it isn't at the end of the line, send it through
+
+                    if (p.dest == nsap) {
+                        // It made it!  Inform the "network" for statistics tracking purposes
+                        debug.println(4, "(DistanceVectorRouter.run): Packet has arrived!  Reporting to the NIC - for accounting purposes!");
+                        debug.println(6, "(DistanceVectorRouter.run): Payload: " + p.payload);
+                        nic.trackArrivals(p.payload);
+                    } else if (p.hopCount > 0) {
+                        // Still more routing to do
+                        p.hopCount--;
+                        //TODO: ROUTE OUT THE PACKAGE
+                    } else {
+                        debug.println(5, "Packet has too many hops.  Dropping packet from " + p.source + " to " + p.dest + " by router " + nsap);
+                    }
+                } else {
+                    debug.println(0, "Error.  The packet being transmitted is not a recognized Flood Packet.  Not processing");
+                }
                 debug.println(3, "(DistanceVectorRouter.run): I am being asked to transmit: " + toSend.data + " to the destination: " + toSend.destination);
             }
 
@@ -61,6 +110,20 @@ public class DistanceVectorRouter extends Router {
 
     public HashMap<Integer, Integer> getRoutingTable(){
         return routingTable;
+    }
+
+    /** Route the given packet out.
+        In our case, we go to all nodes except the originator
+    **/
+    private void route(int linkOriginator, Packet p) {
+        ArrayList<Integer> outLinks = nic.getOutgoingLinks();
+        int size = outLinks.size();
+        for (int i = 0; i < size; i++) {
+            if (outLinks.get(i) != linkOriginator) {
+                // Not the originator of this packet - so send it along!
+                nic.sendOnLink(i, p);
+            }
+        }
     }
 }
 
