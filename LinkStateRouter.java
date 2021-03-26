@@ -19,6 +19,66 @@ public class LinkStateRouter extends Router {
         }
     }
 
+    //use to construct an adjacency matrix to represent a graph of the network
+    public static class NetGraph {
+        int vertices; //number of routers in the network
+        ArrayList<ArrayList<Edge>> adjacencyList;
+        HashMap<Integer, Integer> indexes; //use to associate an NSAP with a vertex index
+        int index = 0;
+
+        public NetGraph(int vertices)
+        {
+            this.vertices = vertices;
+
+            this.indexes = new HashMap<Integer, Integer>(vertices);
+
+            this.adjacencyList = new ArrayList<ArrayList<Edge>>(vertices);
+
+            //initialize adjacency lists for each vertex
+            for (int i = 0; i < vertices; i++)
+            {
+                this.adjacencyList.add(new ArrayList<Edge>());
+            }
+        }
+
+        public void addEdge(int source, int destination, int weight)
+        {
+            if (!this.indexes.containsKey(source))
+            {
+                this.addIndex(source);
+            }
+            if (!this.indexes.containsKey(destination))
+            {
+                this.addIndex(destination);
+            }
+
+            Edge edge = new Edge(this.indexes.get(source), this.indexes.get(destination), weight);
+
+            this.adjacencyList.get(this.indexes.get(source)).add(edge);
+        }
+
+        private void addIndex(int routerID)
+        {
+            this.indexes.put(routerID, index);
+            index++;
+        }
+    }
+
+    //use to represent an edge in a graph
+    public static class Edge 
+    {
+        int source;
+        int destination;
+        int weight;
+
+        public Edge(int source, int destination, int weight)
+        {
+            this.source = source;
+            this.destination = destination;
+            this.weight = weight;
+        }
+    }
+
     //represents an LSP
     //this is a special packet designed to communicate information about each router's neighborhood in the network
     //it does not contain the desired message or payload
@@ -111,7 +171,7 @@ public class LinkStateRouter extends Router {
     HashMap<Integer, HashMap<Integer, Long>> linkSet; //stores most current LSPs of each router on the network
     int sequence; //32 bit sequence number for distributing LSP; increment for every new LSP sent out
     Debug debug;
-    Object fullNetworkGraph; //represents the full graph of the entire network
+    NetGraph fullNetworkGraph; //represents the full graph of the entire network
     ArrayDeque<TransmitRequest> toSendList; //a queue of payloads to send out with a destination 
     HashMap<Integer, TreeSet<Integer>> lspHistory; //list of all LSP sequence numbers from each neighbor
                                                    //should periodically remove the ones that have expired
@@ -150,7 +210,26 @@ public class LinkStateRouter extends Router {
 
             }
             
-            //if (this.linkSet.size() == nic.getOutgoingLinks().size())
+            //The router does not know the number of routers on the network, so we will start building a network graph
+            //once we've obtained a number of LSPs more than double the size of our neighbors
+            if (fullNetworkGraph == null && this.myLSP != null && this.linkSet.size() >= nic.getIncomingLinks().size() * 2)
+            {
+                this.fullNetworkGraph = new NetGraph(this.linkSet.size() + 1);
+
+                //first, we'll add our own edges from our LSP
+                for(Map.Entry<Integer, Long> myNeigh : this.myLSP.neighborEdgeWeights.entrySet())
+                {
+                    this.fullNetworkGraph.addEdge(nsap, myNeigh.getKey(), myNeigh.getValue().intValue());
+                }
+
+                for (Map.Entry<Integer, HashMap<Integer, Long>> owner : this.linkSet.entrySet())
+                {
+                    for (Map.Entry<Integer, Long> neighbor : owner.getValue().entrySet())
+                    {
+                        this.fullNetworkGraph.addEdge(owner.getKey(), neighbor.getKey(), neighbor.getValue().intValue());
+                    }
+                }
+            }
            
             //Next, let's route existing packets in the queue
             if (fullNetworkGraph != null)
