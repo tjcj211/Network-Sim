@@ -1,7 +1,7 @@
 /***************
  * DistanceVectorRouter
  * Author: Christian Duncan
- * Modified by: Ryan Hayes
+ * Modified by: Tim Carta and Ryan Hayes
  * Represents a router that uses a Distance Vector Routing algorithm.
  ***************/
 import java.util.ArrayList;
@@ -30,6 +30,20 @@ public class DistanceVectorRouter extends Router {
         }
     }
 
+    public static class PingPacket {
+        int source;
+        int dest;
+        int hopCount;
+        long ping; 
+
+        public PingPacket(int source, int dest, int hopCount, long ping) {
+            this.source = source;
+            this.dest = dest;
+            this.hopCount = hopCount;
+            this.ping = ping;
+        }
+    }
+
     Debug debug;
     private HashMap<Integer,Integer> routingTable; // Stores all connections and their costs
     
@@ -38,6 +52,8 @@ public class DistanceVectorRouter extends Router {
         debug = Debug.getInstance();  // For debugging!
         initializeRoutingTable(nsap, nic); 
     }
+
+    boolean changedTable = false;
 
     public void run() {
         while (true) {
@@ -48,15 +64,19 @@ public class DistanceVectorRouter extends Router {
                 // There is something to send out
                 process = true;
                 // Send DV to all neighbors if some conditions are met
-                if () { // Changes found or router has been dropped
+                if (changedTable) { // Changes found or router has been dropped
                     Object[] payload = {true, /*[DISTANCE VECTOR]*/};
                     route(-1, new Packet(nsap, toSend.destination, 1, payload));
+                    changedTable = false;
 
                 } else { // No changes found or no routers dropped
                     Object[] payload = {false, toSend.data};
                     route(-1, new Packet(nsap, toSend.destination, 5, payload));
                 }
-                
+
+                //Send a PingPacket (when?)
+                PingPacket p = new PingPacket(nsap, toSend.destination, 2, System.currentTimeMillis());
+                routePing(nsap, p);
 
                 debug.println(3, "(DistanceVectorRouter.run): I am being asked to transmit: " + toSend.data + " to the destination: " + toSend.destination);
             }
@@ -71,6 +91,7 @@ public class DistanceVectorRouter extends Router {
                     if ((Boolean) p.payload[0]){ //Is flagged as a DV
                     	if ((int) p.payload[1] != routingTable.get(p.source)) {
                     		routingTable.put(p.source, (int) p.payload[1]);
+                            changedTable = true;
                     	}
                     }
 
@@ -86,7 +107,6 @@ public class DistanceVectorRouter extends Router {
                         p.hopCount--;
                         Object[] payload = {false, toRoute.data};
                         route(-1, new Packet(p.source, p.dest, p.hopCount, payload));
-                        
                     } else {
                         debug.println(5, "Packet has too many hops.  Dropping packet from " + p.source + " to " + p.dest + " by router " + nsap);
                     }
@@ -94,6 +114,19 @@ public class DistanceVectorRouter extends Router {
                     debug.println(0, "Error.  The packet being transmitted is not a recognized Flood Packet.  Not processing");
                 }
                 debug.println(3, "(DistanceVectorRouter.run): I am being asked to transmit: " + toSend.data + " to the destination: " + toSend.destination);
+
+                if (toRoute.data instanceof PingPacket) {
+                    PingPacket p = (PingPacket) toRoute.data;
+                    p.hopCount--;
+                    if (p.hopCount == 0) { //Packet has been returned
+                        long ping = (System.currentTimeMillis() - p.ping) / 2; //The ping between two routers
+                    } else if (p.hopCount == 1) { //Send back to the original source
+                        p.dest = p.source; //Change the destination to the source to be returned
+                        routePing(p.source, p);
+                    }
+                }
+
+
             }
 
             if (!process) {
@@ -127,6 +160,15 @@ public class DistanceVectorRouter extends Router {
                 // Not the originator of this packet - so send it along!
                 nic.sendOnLink(i, p);
             }
+        }
+    }
+
+    // Send the PingPacket back to the original source
+    private void routePing(int linkOriginator, PingPacket p) {
+        if (p.hopCount == 2) { // Send to destination
+            nic.sendOnLink(p.dest, p);
+        } else { // Send back to source
+            nic.sendOnLink(linkOriginator, p);
         }
     }
 }
