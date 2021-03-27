@@ -4,12 +4,8 @@
  * Modified by: Charles Rescsanski, 
  * Represents a router that uses a Link State Routing algorithm.
  ***************/
-import java.util.ArrayDeque;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.LinkedList;
-import java.util.Map;
-import java.util.TreeSet;
+import java.util.*;
+
 
 public class LinkStateRouter extends Router {
     // A generator for the given LinkStateRouter class
@@ -22,8 +18,9 @@ public class LinkStateRouter extends Router {
     //use to construct an adjacency matrix to represent a graph of the network
     public static class NetGraph {
         int vertices; //number of routers in the network
-        ArrayList<ArrayList<Edge>> adjacencyList;
+        ArrayList<ArrayList<DijkstraNode>> adjacencyList;
         HashMap<Integer, Integer> indexes; //use to associate an NSAP with a vertex index
+        ArrayList<Integer> backToID; //use to link indexes back to ID
         int index = 0;
 
         public NetGraph(int vertices)
@@ -31,17 +28,19 @@ public class LinkStateRouter extends Router {
             this.vertices = vertices;
 
             this.indexes = new HashMap<Integer, Integer>(vertices);
+            this.backToID = new ArrayList<Integer>(vertices);
 
-            this.adjacencyList = new ArrayList<ArrayList<Edge>>(vertices);
+
+            this.adjacencyList = new ArrayList<ArrayList<DijkstraNode>>(vertices);
 
             //initialize adjacency lists for each vertex
             for (int i = 0; i < vertices; i++)
             {
-                this.adjacencyList.add(new ArrayList<Edge>());
+                this.adjacencyList.add(new ArrayList<DijkstraNode>());
             }
         }
 
-        public void addEdge(int source, int destination, int weight)
+        public void addOrReplaceEdge(int source, int destination, int weight)
         {
             if (!this.indexes.containsKey(source))
             {
@@ -52,7 +51,10 @@ public class LinkStateRouter extends Router {
                 this.addIndex(destination);
             }
 
-            Edge edge = new Edge(this.indexes.get(source), this.indexes.get(destination), weight);
+            //we cannot allow duplicate mappings, so we must first remove any preexisting ones
+            this.adjacencyList.get(this.indexes.get(source)).removeIf((edge) -> edge.vertex == this.indexes.get(destination));
+
+            DijkstraNode edge = new DijkstraNode(this.indexes.get(destination), weight);
 
             this.adjacencyList.get(this.indexes.get(source)).add(edge);
         }
@@ -60,22 +62,39 @@ public class LinkStateRouter extends Router {
         private void addIndex(int routerID)
         {
             this.indexes.put(routerID, index);
+            this.backToID.add(index, routerID);
             index++;
         }
     }
 
-    //use to represent an edge in a graph
-    public static class Edge 
+    //used to store current distance of each vertex in djkstra algorithm
+    public static class DijkstraNode implements Comparator<DijkstraNode>
     {
-        int source;
-        int destination;
-        int weight;
+        int vertex;
+        int cost;
 
-        public Edge(int source, int destination, int weight)
+        public DijkstraNode(int vertex, int cost)
         {
-            this.source = source;
-            this.destination = destination;
-            this.weight = weight;
+            this.vertex = vertex;
+            this.cost = cost;
+        }
+        public DijkstraNode() { }
+
+        @Override 
+        public int compare(DijkstraNode node1, DijkstraNode node2)
+        {
+            if (node1.cost < node2.cost)
+            {
+                return -1;
+            }
+            else if (node1.cost > node2.cost)
+            {
+                return 1;
+            }
+            else
+            {
+                return 0;
+            }   
         }
     }
 
@@ -124,14 +143,16 @@ public class LinkStateRouter extends Router {
         int[] shortestPath;  //the "shortest" sequence of nodes from the source to the destination
         int progress; //corresponds to current index position in the calculated path
         Object payload;  //the message to send
+        int hopCount; //time to live
 
-        public DijkstraPacket(int finalDest, int source, int[] shortestPath, int progress, Object payload)
+        public DijkstraPacket(int finalDest, int source, int[] shortestPath, int progress, Object payload, int hopCount)
         {
             this.finalDest = finalDest;
             this.source = source;
             this.shortestPath = shortestPath;
             this.progress = progress;
             this.payload = payload;
+            this.hopCount = hopCount;
         }
     }
 
@@ -219,14 +240,14 @@ public class LinkStateRouter extends Router {
                 //first, we'll add our own edges from our LSP
                 for(Map.Entry<Integer, Long> myNeigh : this.myLSP.neighborEdgeWeights.entrySet())
                 {
-                    this.fullNetworkGraph.addEdge(nsap, myNeigh.getKey(), myNeigh.getValue().intValue());
+                    this.fullNetworkGraph.addOrReplaceEdge(nsap, myNeigh.getKey(), myNeigh.getValue().intValue());
                 }
 
                 for (Map.Entry<Integer, HashMap<Integer, Long>> owner : this.linkSet.entrySet())
                 {
                     for (Map.Entry<Integer, Long> neighbor : owner.getValue().entrySet())
                     {
-                        this.fullNetworkGraph.addEdge(owner.getKey(), neighbor.getKey(), neighbor.getValue().intValue());
+                        this.fullNetworkGraph.addOrReplaceEdge(owner.getKey(), neighbor.getKey(), neighbor.getValue().intValue());
                     }
                 }
             }
@@ -238,7 +259,7 @@ public class LinkStateRouter extends Router {
                 for (TransmitRequest t : this.toSendList)
                 {
                     int[] shortestPath = dijkstraAlg(t.dest);
-                    dijkstraRoute(new DijkstraPacket(t.dest, nsap, shortestPath, 1, t.payload));
+                    dijkstraRoute(new DijkstraPacket(t.dest, nsap, shortestPath, 1, t.payload, 20));
                 }
                 
             }
@@ -249,7 +270,7 @@ public class LinkStateRouter extends Router {
                 if (fullNetworkGraph != null)
                 {
                     int[] shortestPath = dijkstraAlg(toSend.destination);
-                    dijkstraRoute(new DijkstraPacket(toSend.destination, nsap, shortestPath, 1, toSend.data));
+                    dijkstraRoute(new DijkstraPacket(toSend.destination, nsap, shortestPath, 1, toSend.data, 20));
                 }
                 //payloads cannot be sent until the router has built a graph of the entire network
                 //we'll store them temporarily in a queue to transmit later
@@ -277,9 +298,20 @@ public class LinkStateRouter extends Router {
                     }
                     else  
                     {
-                        //still more routing to do
-                        p.progress ++; //advance the progress index to next node in the path
-                        dijkstraRoute(p);                    
+                        if (p.hopCount > 0)
+                        {
+                             //still more routing to do
+                            p.progress ++; //advance the progress index to next node in the path
+                            p.hopCount --; //decrement hop count
+                            dijkstraRoute(p);   
+                        }
+                        else 
+                        {
+                            //packet is too hold, we must discard it
+                            debug.println(0, "Packet has too many hops; Router " + nsap + " dropping packet from " + p.source + "intended for " + p.finalDest);
+                        }
+                        
+                                        
                     }
                    
                 }
@@ -444,10 +476,93 @@ public class LinkStateRouter extends Router {
         }
     }
 
-    //computes the shortest path from a single source to a given destination using dijkstra's algorithm
+    //computes the shortest path from a single source to all destinations using dijkstra's algorithm
     //requires knowledge of the entire network 
-    private int[] dijkstraAlg(int dest)
+    //returns a routing table containing the shortest path to every other router on the network
+    private HashMap<Integer, Deque<Integer>> dijkstraAlg(int dest)
     {
-        return new int[1];
+        //the source vertex is assumed to be the vertex corresponding to this router
+        //we'll use a min heap of size V (or the number of vertices) to store the vertices not yet included in SPT (shortest path tree)
+        //each element in the heap contains a vertex and its current distance value
+        PriorityQueue<DijkstraNode> minHeap = new PriorityQueue<DijkstraNode>(this.fullNetworkGraph.vertices, new DijkstraNode());
+        Set<Integer> settled = new HashSet<Integer>();
+        int dist[] = new int[this.fullNetworkGraph.vertices];
+        //we'll traverse "prev" in reverse to get the shortest path from node u to v
+        int prev[] = new int[this.fullNetworkGraph.vertices]; //stores values representing the next location to get to the shortest route to the source
+
+        for (int i = 0; i < this.fullNetworkGraph.vertices; i++)
+        {
+            dist[i] = Integer.MAX_VALUE;
+            prev[i] = -1; //we haven't computed the shortest paths, so these will be undefined "-1" at first
+
+        }
+
+        //distance to source vertex is 0 at start
+        dist[this.fullNetworkGraph.indexes.get(nsap)] = 0;
+
+        //set source vertex to have initial cost of 0
+        minHeap.add(new DijkstraNode(this.fullNetworkGraph.indexes.get(nsap), 0));
+
+        while(settled.size() != this.fullNetworkGraph.vertices)
+        {
+            //remove minimum distance node from priority queue
+            int min = minHeap.remove().vertex;
+
+            //add node to the finalized hashset
+            settled.add(min);
+
+            int edgeDistance = -1;
+            int newDistance = -1;
+    
+            for (int i = 0; i < this.fullNetworkGraph.adjacencyList.get(min).size(); i++)
+            {
+                DijkstraNode v = this.fullNetworkGraph.adjacencyList.get(min).get(i);
+    
+                //if current node hasn't yet been processed
+                if (!settled.contains(v.vertex))
+                {
+                    edgeDistance = v.cost;
+                    newDistance = dist[min] + edgeDistance;
+
+                    //if new distance is cheaper in cost
+                    if (newDistance < dist[v.vertex])
+                    {
+                        dist[v.vertex] = newDistance;
+                        prev[v.vertex] = min; //min is the next node to take from v to form the shortest route to the source
+                    }
+
+                    //Add current node to the priority queue
+                    minHeap.add(new DijkstraNode(v.vertex, dist[v.vertex]));
+                }
+    
+    
+            }
+        }
+
+        HashMap<Integer, Deque<Integer>> routingTable = new HashMap<Integer, Deque<Integer>>();
+        //next, let's build the routing table
+        for (int i = 0; i < dist.length; i++)
+        {
+            if (i != this.fullNetworkGraph.indexes.get(nsap))
+            {
+                if (dist[i] >= 0) //otherwise, the path doesn't exist
+                {
+                    int z = i;
+                    routingTable.put(this.fullNetworkGraph.indexes.get(z), new ArrayDeque<Integer>());
+                    Deque<Integer> path = routingTable.get(this.fullNetworkGraph.indexes.get(z));
+                    while (z >= 0)
+                    {
+                        path.push(this.fullNetworkGraph.backToID.get(z));
+                        z = prev[z];
+                    }
+                }
+            }
+        }
+
+        return routingTable;
+
+
     }
+
+   
 }
