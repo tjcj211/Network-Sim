@@ -16,28 +16,26 @@ public class LinkStateRouter extends Router {
     }
 
     //use to construct an adjacency matrix to represent a graph of the network
-    public static class NetGraph {
-        int vertices; //number of routers in the network
+    public class NetGraph {
         ArrayList<ArrayList<DijkstraNode>> adjacencyList;
         HashMap<Integer, Integer> indexes; //use to associate an NSAP with a vertex index
         ArrayList<Integer> backToID; //use to link indexes back to ID
         int index = 0;
 
-        public NetGraph(int vertices)
+        public NetGraph()
         {
-            this.vertices = vertices;
+            this.indexes = new HashMap<Integer, Integer>();
+            this.backToID = new ArrayList<Integer>();
 
-            this.indexes = new HashMap<Integer, Integer>(vertices);
-            this.backToID = new ArrayList<Integer>(vertices);
+            this.adjacencyList = new ArrayList<ArrayList<DijkstraNode>>();
 
+            this.addIndex(nsap); //let's first add ourself
 
-            this.adjacencyList = new ArrayList<ArrayList<DijkstraNode>>(vertices);
+        }
 
-            //initialize adjacency lists for each vertex
-            for (int i = 0; i < vertices; i++)
-            {
-                this.adjacencyList.add(new ArrayList<DijkstraNode>());
-            }
+        public int getNumVertices() 
+        {
+            return this.adjacencyList.size();
         }
 
         public void addOrReplaceEdge(int source, int destination, int weight)
@@ -62,7 +60,23 @@ public class LinkStateRouter extends Router {
         private void addIndex(int routerID)
         {
             this.indexes.put(routerID, index);
-            this.backToID.add(index, routerID);
+            if (index >= this.backToID.size())
+            {
+                this.backToID.add(routerID);
+            }
+            else
+            {
+                this.backToID.set(index, routerID);
+            }
+                      
+            if (index >= this.adjacencyList.size())
+            {
+                this.adjacencyList.add(new ArrayList<DijkstraNode>());
+            }
+            else
+            {
+                this.adjacencyList.set(index, new ArrayList<DijkstraNode>());
+            }
             index++;
         }
     }
@@ -140,17 +154,15 @@ public class LinkStateRouter extends Router {
     public static class DijkstraPacket{
         int finalDest; //the intended recipient of message
         int source; //the originator of the message
-        int[] shortestPath;  //the "shortest" sequence of nodes from the source to the destination
-        int progress; //corresponds to current index position in the calculated path
+        Stack<Integer> shortestPath;  //the "shortest" sequence of nodes from the source to the destination (excluding source)
         Object payload;  //the message to send
         int hopCount; //time to live
 
-        public DijkstraPacket(int finalDest, int source, int[] shortestPath, int progress, Object payload, int hopCount)
+        public DijkstraPacket(int finalDest, int source, Stack<Integer> shortestPath, Object payload, int hopCount)
         {
             this.finalDest = finalDest;
             this.source = source;
             this.shortestPath = shortestPath;
-            this.progress = progress;
             this.payload = payload;
             this.hopCount = hopCount;
         }
@@ -160,11 +172,13 @@ public class LinkStateRouter extends Router {
     public static class TransmitRequest{
         Object payload;
         int dest;
+        boolean processed;
 
         public TransmitRequest(Object payload, int dest)
         {
             this.payload = payload;
             this.dest = dest;
+            this.processed = false;
         }
 
     }
@@ -189,25 +203,37 @@ public class LinkStateRouter extends Router {
         }
     }
     LSP myLSP;
-    HashMap<Integer, HashMap<Integer, Long>> linkSet; //stores most current LSPs of each router on the network
+    HashMap<Integer, LSP> linkSet; //stores most current LSPs of each router on the network
     int sequence; //32 bit sequence number for distributing LSP; increment for every new LSP sent out
+    int lspTimer; //use to dictate how frequently to send out new LSPs
+    int pingTimer;  //how often to send out echo packets
+    int pathTableTimer;  //dicates how frequently to rebuild network graph and run dijkstra
+    int decrementAgeTimer; //dicates how frequently to decrease age value of LSP packets
     Debug debug;
     NetGraph fullNetworkGraph; //represents the full graph of the entire network
-    ArrayDeque<TransmitRequest> toSendList; //a queue of payloads to send out with a destination 
+    Queue<TransmitRequest> toSendList; //a queue of payloads to send out with a destination 
     HashMap<Integer, TreeSet<Integer>> lspHistory; //list of all LSP sequence numbers from each neighbor
                                                    //should periodically remove the ones that have expired
     HashMap<Integer, WeightCalc> neighborEdgeCalcs; // used to calculate costs using send and receive time
     HashMap<Integer, Long> neighborEdgeWeights; //the costs associated with each neighbor of the owner
+    HashMap<Integer, Stack<Integer>> routingTable; //stores the currently calculated shortest paths from source to all other nodes
+    
 
     public LinkStateRouter(int nsap, NetworkInterface nic) {
         super(nsap, nic);
         debug = Debug.getInstance();  // For debugging!
-        this.toSendList = new ArrayDeque<TransmitRequest>();
+        this.toSendList = new LinkedList<TransmitRequest>();
+        this.routingTable = new HashMap<Integer, Stack<Integer>>();
         this.lspHistory = new HashMap<Integer, TreeSet<Integer>>();
         this.neighborEdgeCalcs = new HashMap<Integer, WeightCalc>();
         this.neighborEdgeWeights = new HashMap<Integer, Long>();
-        this.linkSet = new HashMap<Integer, HashMap<Integer, Long>>();
+        this.linkSet = new HashMap<Integer, LSP>();
+        this.fullNetworkGraph = new NetGraph();
         this.sequence = 0; 
+        this.lspTimer = 0;
+        this.decrementAgeTimer = 10000;
+        this.pingTimer = 500000;
+        this.pathTableTimer = 1000;
     }
 
     public void run() {
@@ -220,62 +246,108 @@ public class LinkStateRouter extends Router {
             boolean process = false;
             NetworkInterface.TransmitPair toSend = nic.getTransmit();
 
+            if (this.decrementAgeTimer <= 0)
+            {
+                this.decrementLSPAge();
+                this.decrementAgeTimer = 10000;
+            }
+            else
+            {
+                this.decrementAgeTimer --;
+            }
+
+            //let's periodically try to recalculate weights
+            if (this.pingTimer <= 0)
+            {
+                this.echoOut();
+                this.pingTimer = 500000;
+            }
+            else
+            {
+                this.pingTimer --;
+            }
+
             //First, let's build an LSP (if possible)
-            if (this.myLSP == null && this.checkAllWeights_UpdateMaster())
+            if (this.checkAllWeights_UpdateMaster() && this.lspTimer <= 0)
             {
                 //Yes, all neighbor weights have been calculated, so we can build our LSP packet
                 this.myLSP = new LSP(nsap, this.sequence, 60, this.neighborEdgeWeights);
-
+                this.sequence++; //so that next LSP sent out can be distinguished
                 //LSP will go to everyone except the direct link from which we just received it.
                 this.lspRoute(-1, this.myLSP); //we'll use the flooding algorithm to distribute LSP
 
+                this.lspTimer = 500000; //reset the timer
+
+            }
+            else if (this.lspTimer > 0)
+            {
+                this.lspTimer --;
             }
             
-            //The router does not know the number of routers on the network, so we will start building a network graph
-            //once we've obtained a number of LSPs more than double the size of our neighbors
-            if (fullNetworkGraph == null && this.myLSP != null && this.linkSet.size() >= nic.getIncomingLinks().size() * 2)
+            
+            if (this.pathTableTimer <= 0 && this.myLSP != null)
             {
-                this.fullNetworkGraph = new NetGraph(this.linkSet.size() + 1);
+                //this.fullNetworkGraph = new NetGraph();
 
                 //first, we'll add our own edges from our LSP
                 for(Map.Entry<Integer, Long> myNeigh : this.myLSP.neighborEdgeWeights.entrySet())
                 {
                     this.fullNetworkGraph.addOrReplaceEdge(nsap, myNeigh.getKey(), myNeigh.getValue().intValue());
                 }
-
-                for (Map.Entry<Integer, HashMap<Integer, Long>> owner : this.linkSet.entrySet())
+    
+                for (Map.Entry<Integer, LSP> owner : this.linkSet.entrySet())
                 {
-                    for (Map.Entry<Integer, Long> neighbor : owner.getValue().entrySet())
+                    for (Map.Entry<Integer, Long> neighbor : owner.getValue().neighborEdgeWeights.entrySet())
                     {
                         this.fullNetworkGraph.addOrReplaceEdge(owner.getKey(), neighbor.getKey(), neighbor.getValue().intValue());
                     }
                 }
+
+                //runs dijkstra's algorithm on graph and builds a routing table
+                this.routingTable = this.dijkstraAlg();
+
+                //reset timer
+                this.pathTableTimer = 1000;
             }
-           
-            //Next, let's route existing packets in the queue
-            if (fullNetworkGraph != null)
+            else if (this.pathTableTimer > 0)
             {
-                process = true;
-                for (TransmitRequest t : this.toSendList)
+                this.pathTableTimer --;
+            }
+
+            
+           
+            //Next, let's route existing packets in the queue (if possible)
+            //those that can be routed are removed from the queue
+            
+            for (TransmitRequest t : this.toSendList)
+            {
+                if (this.routingTable.containsKey(t.dest) && this.routingTable.get(t.dest).size() > 0)
                 {
-                    int[] shortestPath = dijkstraAlg(t.dest);
-                    dijkstraRoute(new DijkstraPacket(t.dest, nsap, shortestPath, 1, t.payload, 20));
+                    process = true;
+                    Stack<Integer> path = this.routingTable.get(t.dest);
+                    int nextDest = path.pop();
+                    dijkstraRoute(new DijkstraPacket(t.dest, nsap, this.routingTable.get(t.dest), t.payload, 20), nextDest);
+                    t.processed = true;
                 }
                 
             }
+            this.toSendList.removeIf((request) -> request.processed);
+                
+            
             if (toSend != null) {
-                // There is something to send out
+                // There is something new to send out
                 process = true;
-                debug.println(1, "(LinkStateRouter.run): I am being asked to transmit: " + toSend.data + " to the destination: " + toSend.destination);
-                if (fullNetworkGraph != null)
+                debug.println(0, "(LinkStateRouter.run): I am being asked to transmit: " + toSend.data + " to the destination: " + toSend.destination);
+                if (this.routingTable.containsKey(toSend.destination) && this.routingTable.get(toSend.destination).size() > 0)
                 {
-                    int[] shortestPath = dijkstraAlg(toSend.destination);
-                    dijkstraRoute(new DijkstraPacket(toSend.destination, nsap, shortestPath, 1, toSend.data, 20));
+                    Stack<Integer> path = this.routingTable.get(toSend.destination);
+                    int nextDest = path.pop();
+                    dijkstraRoute(new DijkstraPacket(toSend.destination, nsap, this.routingTable.get(toSend.destination), toSend.data, 2000), nextDest);
                 }
-                //payloads cannot be sent until the router has built a graph of the entire network
-                //we'll store them temporarily in a queue to transmit later
                 else
                 {
+                    //payloads cannot be sent until the router has built a graph of the entire network
+                    //we'll store them temporarily in a queue to transmit later
                     this.toSendList.add(new TransmitRequest(toSend.data, toSend.destination));
                 }
             }
@@ -301,13 +373,22 @@ public class LinkStateRouter extends Router {
                         if (p.hopCount > 0)
                         {
                              //still more routing to do
-                            p.progress ++; //advance the progress index to next node in the path
                             p.hopCount --; //decrement hop count
-                            dijkstraRoute(p);   
+                            Stack<Integer> curPath = p.shortestPath;
+                            try 
+                            {
+                                int nextDest = curPath.pop();
+                                debug.println(0, "Packet originating from " + p.source + "is being sent to " + nextDest);
+                                dijkstraRoute(p, nextDest);  
+                            }
+                            catch (EmptyStackException e)
+                            {
+                                debug.println(0, "Dropping packet due to invalid path");
+                            }    
                         }
                         else 
                         {
-                            //packet is too hold, we must discard it
+                            //packet is too old, we must discard it
                             debug.println(0, "Packet has too many hops; Router " + nsap + " dropping packet from " + p.source + "intended for " + p.finalDest);
                         }
                         
@@ -335,9 +416,9 @@ public class LinkStateRouter extends Router {
                                 if (!(p.sequence < this.lspHistory.get(p.source).last()))
                                 {
                                     p.age --;
-                                    debug.println(1, "Router " + nsap + " has received an updated LSP from router " + p.source);
+                                    debug.println(0, "Router " + nsap + " has received an updated LSP from router " + p.source);
                                     //replace LSP info to our master table
-                                    this.linkSet.put(p.source, p.neighborEdgeWeights);
+                                    this.linkSet.put(p.source, p);
                                     lspRoute(toRoute.originator, p);
                                 }
                                 else 
@@ -359,7 +440,7 @@ public class LinkStateRouter extends Router {
                             this.lspHistory.put(p.source, list);
                             debug.println(0, "Router " + nsap + " has received its first LSP from router " + p.source);
                              //add LSP info to our master table
-                             this.linkSet.put(p.source, p.neighborEdgeWeights);
+                             this.linkSet.put(p.source, p);
                             lspRoute(toRoute.originator, p);
                         }
                     }
@@ -377,7 +458,7 @@ public class LinkStateRouter extends Router {
                         WeightCalc weCalc = this.neighborEdgeCalcs.get(p.neighbor);
                         weCalc.setReceiveTime(System.currentTimeMillis());
 
-                        debug.println(0, "Edge weight from (" + nsap + " --> " + p.neighbor + "): " + weCalc.getWeight());
+                        debug.println(1, "Edge weight from (" + nsap + " --> " + p.neighbor + "): " + weCalc.getWeight());
                     }
                     else
                     {
@@ -389,7 +470,7 @@ public class LinkStateRouter extends Router {
                 }
                 else 
                 {
-                    debug.println(0, "Error.  The packet being tranmitted is not a recognized LinkStateRouter Packet.  Not processing");
+                    debug.println(1, "Error.  The packet being tranmitted is not a recognized LinkStateRouter Packet.  Not processing");
                   
                 }
                 
@@ -408,11 +489,11 @@ public class LinkStateRouter extends Router {
         /** Route the given packet out.
         In our case, we go to the node specified in the calculated path
     **/
-    private void dijkstraRoute(DijkstraPacket p) {
+    private void dijkstraRoute(DijkstraPacket p, int nextDest) {
         ArrayList<Integer> outLinks = nic.getOutgoingLinks();
         int size = outLinks.size();
         for (int i = 0; i < size; i++) {
-            if (outLinks.get(i) == p.shortestPath[p.progress]) {
+            if (outLinks.get(i) == nextDest) {
                 // Send packet to ONLY the next link in the calculated path
                 nic.sendOnLink(i, p);
             }
@@ -479,18 +560,21 @@ public class LinkStateRouter extends Router {
     //computes the shortest path from a single source to all destinations using dijkstra's algorithm
     //requires knowledge of the entire network 
     //returns a routing table containing the shortest path to every other router on the network
-    private HashMap<Integer, Deque<Integer>> dijkstraAlg(int dest)
+    private HashMap<Integer, Stack<Integer>> dijkstraAlg()
     {
         //the source vertex is assumed to be the vertex corresponding to this router
         //we'll use a min heap of size V (or the number of vertices) to store the vertices not yet included in SPT (shortest path tree)
         //each element in the heap contains a vertex and its current distance value
-        PriorityQueue<DijkstraNode> minHeap = new PriorityQueue<DijkstraNode>(this.fullNetworkGraph.vertices, new DijkstraNode());
-        Set<Integer> settled = new HashSet<Integer>();
-        int dist[] = new int[this.fullNetworkGraph.vertices];
-        //we'll traverse "prev" in reverse to get the shortest path from node u to v
-        int prev[] = new int[this.fullNetworkGraph.vertices]; //stores values representing the next location to get to the shortest route to the source
 
-        for (int i = 0; i < this.fullNetworkGraph.vertices; i++)
+        int vertices = this.fullNetworkGraph.getNumVertices();
+
+        PriorityQueue<DijkstraNode> minHeap = new PriorityQueue<DijkstraNode>(vertices, new DijkstraNode());
+        Set<Integer> settled = new HashSet<Integer>();
+        int dist[] = new int[vertices];
+        //we'll traverse "prev" in reverse to get the shortest path from node u to v
+        int prev[] = new int[vertices]; //stores values representing the next location to get to the shortest route to the source
+
+        for (int i = 0; i < vertices; i++)
         {
             dist[i] = Integer.MAX_VALUE;
             prev[i] = -1; //we haven't computed the shortest paths, so these will be undefined "-1" at first
@@ -502,11 +586,19 @@ public class LinkStateRouter extends Router {
 
         //set source vertex to have initial cost of 0
         minHeap.add(new DijkstraNode(this.fullNetworkGraph.indexes.get(nsap), 0));
-
-        while(settled.size() != this.fullNetworkGraph.vertices)
+        //System.out.println("Adjacency List: " + vertices + "   Indexes: " + this.fullNetworkGraph.indexes.size() + "    BackToID: " + this.fullNetworkGraph.backToID.size());
+        while(settled.size() != vertices)
         {
             //remove minimum distance node from priority queue
-            int min = minHeap.remove().vertex;
+            int min;
+            try
+            {
+                min = minHeap.remove().vertex;
+            }
+            catch (NoSuchElementException e)
+            {
+                break;
+            }
 
             //add node to the finalized hashset
             settled.add(min);
@@ -539,7 +631,7 @@ public class LinkStateRouter extends Router {
             }
         }
 
-        HashMap<Integer, Deque<Integer>> routingTable = new HashMap<Integer, Deque<Integer>>();
+        HashMap<Integer, Stack<Integer>> routingTable = new HashMap<Integer, Stack<Integer>>();
         //next, let's build the routing table
         for (int i = 0; i < dist.length; i++)
         {
@@ -548,12 +640,22 @@ public class LinkStateRouter extends Router {
                 if (dist[i] >= 0) //otherwise, the path doesn't exist
                 {
                     int z = i;
-                    routingTable.put(this.fullNetworkGraph.indexes.get(z), new ArrayDeque<Integer>());
-                    Deque<Integer> path = routingTable.get(this.fullNetworkGraph.indexes.get(z));
+                    routingTable.put(this.fullNetworkGraph.backToID.get(z), new Stack<Integer>());
+                    Stack<Integer> path = routingTable.get(this.fullNetworkGraph.backToID.get(z));
                     while (z >= 0)
                     {
                         path.push(this.fullNetworkGraph.backToID.get(z));
                         z = prev[z];
+                    }
+
+                    if (path.peek() == this.nsap)
+                    {
+                        path.pop(); //we want the first node in the path to contain the first destination
+                    }
+
+                    if (path.size() <= 0)
+                    {
+                        this.routingTable.remove(this.fullNetworkGraph.backToID.get(i));
                     }
                 }
             }
@@ -562,6 +664,39 @@ public class LinkStateRouter extends Router {
         return routingTable;
 
 
+    }
+
+    public void decrementLSPAge()
+    {
+        Set<Integer> keys = this.linkSet.keySet();
+        Set<Integer> toRemove = new HashSet<Integer>();
+        for (int key : keys)
+        {
+            if (this.linkSet.get(key).age <= 0)
+            {
+                //this.linkSet.remove(key);
+                toRemove.add(key);
+            }
+            else
+            {
+                this.linkSet.get(key).age --;
+            }
+        }
+
+        toRemove.forEach((key) -> this.linkSet.remove(key));
+
+        if (this.myLSP != null)
+        {
+            if(this.myLSP.age <= 0)
+            {
+                this.myLSP = null;
+                this.sequence ++;
+            }
+            else 
+            {
+                this.myLSP.age --;
+            }
+        }
     }
 
    
