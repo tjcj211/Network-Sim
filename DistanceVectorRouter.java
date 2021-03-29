@@ -163,12 +163,22 @@ public class DistanceVectorRouter extends Router {
         }
     }
 
-    // Send the PingPacket back to the original source
+    /** Route the PingPacket
+        Send back to the original source or pass to the destination
+    **/
     private void routePing(int linkOriginator, PingPacket p) {
-        if (p.hopCount == 2) { // Send to destination
-            nic.sendOnLink(p.dest, p);
-        } else { // Send back to source
-            nic.sendOnLink(linkOriginator, p);
+        ArrayList<Integer> outLinks = nic.getOutgoingLinks();
+        int size = outLinks.size();
+        for (int i = 0; i < size; i++) {
+            if (p.hopCount == 2) { // Send to destination to check ping
+                if (outLinks.get(i) == p.dest) {
+                    nic.sendOnLink(p.dest, p);
+                }
+            } else { // Send back to source
+                if (outLinks.get(i) == linkOriginator) {
+                    nic.sendOnLink(linkOriginator, p);
+                }
+            }
         }
     }
 }
