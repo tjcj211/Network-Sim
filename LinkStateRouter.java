@@ -321,13 +321,21 @@ public class LinkStateRouter extends Router {
             
             for (TransmitRequest t : this.toSendList)
             {
-                if (this.routingTable.containsKey(t.dest) && this.routingTable.get(t.dest).size() > 0)
+                if (this.routingTable.containsKey(t.dest) && !this.routingTable.get(t.dest).isEmpty())
                 {
                     process = true;
                     Stack<Integer> path = this.routingTable.get(t.dest);
-                    int nextDest = path.pop();
-                    dijkstraRoute(new DijkstraPacket(t.dest, nsap, this.routingTable.get(t.dest), t.payload, 20), nextDest);
-                    t.processed = true;
+                    try 
+                    {
+                        int nextDest = path.pop(); 
+                        dijkstraRoute(new DijkstraPacket(t.dest, nsap, this.routingTable.get(t.dest), t.payload, 20), nextDest);
+                        t.processed = true; 
+                    }
+                    catch (EmptyStackException e)
+                    {
+                        t.processed = false;
+                    } 
+                    
                 }
                 
             }
@@ -337,12 +345,17 @@ public class LinkStateRouter extends Router {
             if (toSend != null) {
                 // There is something new to send out
                 process = true;
-                debug.println(0, "(LinkStateRouter.run): I am being asked to transmit: " + toSend.data + " to the destination: " + toSend.destination);
-                if (this.routingTable.containsKey(toSend.destination) && this.routingTable.get(toSend.destination).size() > 0)
+                debug.println(5, "(LinkStateRouter.run): I am being asked to transmit: " + toSend.data + " to the destination: " + toSend.destination);
+                if (this.routingTable.containsKey(toSend.destination) && !this.routingTable.get(toSend.destination).isEmpty())
                 {
                     Stack<Integer> path = this.routingTable.get(toSend.destination);
-                    int nextDest = path.pop();
-                    dijkstraRoute(new DijkstraPacket(toSend.destination, nsap, this.routingTable.get(toSend.destination), toSend.data, 2000), nextDest);
+                    try 
+                    {
+                        int nextDest = path.pop();
+                        dijkstraRoute(new DijkstraPacket(toSend.destination, nsap, this.routingTable.get(toSend.destination), toSend.data, 2000), nextDest);
+                    }
+                    catch (EmptyStackException e) { this.toSendList.add(new TransmitRequest(toSend.data, toSend.destination));}
+                    
                 }
                 else
                 {
@@ -364,8 +377,8 @@ public class LinkStateRouter extends Router {
                     DijkstraPacket p = (DijkstraPacket) toRoute.data;
                     if (p.finalDest == nsap) {
                         // It made it!  Inform the "network" for statistics tracking purposes
-                        debug.println(0, "(LinkStateRouter.run): Packet has arrived!  Reporting to the NIC - for accounting purposes!");
-                        debug.println(0, "(LinkStateRouter.run): Payload: " + p.payload);
+                        debug.println(4, "(LinkStateRouter.run): Packet has arrived!  Reporting to the NIC - for accounting purposes!");
+                        debug.println(4, "(LinkStateRouter.run): Payload: " + p.payload);
                         nic.trackArrivals(p.payload);
                     }
                     else  
@@ -378,7 +391,7 @@ public class LinkStateRouter extends Router {
                             try 
                             {
                                 int nextDest = curPath.pop();
-                                debug.println(0, "Packet originating from " + p.source + "is being sent to " + nextDest);
+                                debug.println(5, "Packet originating from " + p.source + "is being sent to " + nextDest);
                                 dijkstraRoute(p, nextDest);  
                             }
                             catch (EmptyStackException e)
@@ -416,7 +429,7 @@ public class LinkStateRouter extends Router {
                                 if (!(p.sequence < this.lspHistory.get(p.source).last()))
                                 {
                                     p.age --;
-                                    debug.println(0, "Router " + nsap + " has received an updated LSP from router " + p.source);
+                                    debug.println(3, "Router " + nsap + " has received an updated LSP from router " + p.source);
                                     //replace LSP info to our master table
                                     this.linkSet.put(p.source, p);
                                     lspRoute(toRoute.originator, p);
@@ -438,7 +451,7 @@ public class LinkStateRouter extends Router {
                             list.add(p.sequence);
                             p.age --;
                             this.lspHistory.put(p.source, list);
-                            debug.println(0, "Router " + nsap + " has received its first LSP from router " + p.source);
+                            debug.println(5, "Router " + nsap + " has received its first LSP from router " + p.source);
                              //add LSP info to our master table
                              this.linkSet.put(p.source, p);
                             lspRoute(toRoute.originator, p);
@@ -458,19 +471,19 @@ public class LinkStateRouter extends Router {
                         WeightCalc weCalc = this.neighborEdgeCalcs.get(p.neighbor);
                         weCalc.setReceiveTime(System.currentTimeMillis());
 
-                        debug.println(1, "Edge weight from (" + nsap + " --> " + p.neighbor + "): " + weCalc.getWeight());
+                        debug.println(4, "Edge weight from (" + nsap + " --> " + p.neighbor + "): " + weCalc.getWeight());
                     }
                     else
                     {
                         //no need to check destination for these because they are on sent by immediate neighbors
-                        debug.println(1, "Neighbor " + nsap + " RETURNS echo to router " + p.requester);
+                        debug.println(8, "Neighbor " + nsap + " RETURNS echo to router " + p.requester);
                         this.returnEcho(p);
                     }
                
                 }
                 else 
                 {
-                    debug.println(1, "Error.  The packet being tranmitted is not a recognized LinkStateRouter Packet.  Not processing");
+                    debug.println(0, "Error.  The packet being tranmitted is not a recognized LinkStateRouter Packet.  Not processing");
                   
                 }
                 
@@ -552,7 +565,7 @@ public class LinkStateRouter extends Router {
         for (int i = 0; i < size; i++) {
                 EchoPacket p = new EchoPacket(this.nsap, outLinks.get(i));
                 this.neighborEdgeCalcs.put(outLinks.get(i), new WeightCalc(System.currentTimeMillis()));
-                debug.println(1, "Router " + nsap + " SENDS echo to neighbor " + p.neighbor);
+                debug.println(9, "Router " + nsap + " SENDS echo to neighbor " + p.neighbor);
                 nic.sendOnLink(i, p);
         }
     }
@@ -648,15 +661,15 @@ public class LinkStateRouter extends Router {
                         z = prev[z];
                     }
 
-                    if (path.peek() == this.nsap)
-                    {
-                        path.pop(); //we want the first node in the path to contain the first destination
-                    }
-
-                    if (path.size() <= 0)
+                    if (path.isEmpty())
                     {
                         this.routingTable.remove(this.fullNetworkGraph.backToID.get(i));
                     }
+
+                    if (path.peek() == this.nsap)
+                    {
+                        path.pop(); //we want the first node in the path to contain the first destination
+                    }                
                 }
             }
         }
