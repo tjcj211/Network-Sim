@@ -202,21 +202,21 @@ public class LinkStateRouter extends Router {
             return null;  
         }
     }
-    LSP myLSP;
-    HashMap<Integer, LSP> linkSet; //stores most current LSPs of each router on the network
-    int sequence; //32 bit sequence number for distributing LSP; increment for every new LSP sent out
-    int lspTimer; //use to dictate how frequently to send out new LSPs
-    int pingTimer;  //how often to send out echo packets
-    int pathTableTimer;  //dicates how frequently to rebuild network graph and run dijkstra
-    int decrementAgeTimer; //dicates how frequently to decrease age value of LSP packets
-    Debug debug;
-    NetGraph fullNetworkGraph; //represents the full graph of the entire network
-    Queue<TransmitRequest> toSendList; //a queue of payloads to send out with a destination 
-    HashMap<Integer, TreeSet<Integer>> lspHistory; //list of all LSP sequence numbers from each neighbor
+    private LSP myLSP;
+    private HashMap<Integer, LSP> linkSet; //stores most current LSPs of each router on the network
+    private int sequence; //32 bit sequence number for distributing LSP; increment for every new LSP sent out
+    private int lspTimer; //use to dictate how frequently to send out new LSPs
+    private int pingTimer;  //how often to send out echo packets
+    private int pathTableTimer;  //dicates how frequently to rebuild network graph and run dijkstra
+    private int decrementAgeTimer; //dicates how frequently to decrease age value of LSP packets
+            Debug debug;
+    private NetGraph fullNetworkGraph; //represents the full graph of the entire network
+    private Queue<TransmitRequest> toSendList; //a queue of payloads to send out with a destination 
+    private HashMap<Integer, TreeSet<Integer>> lspHistory; //list of all LSP sequence numbers from each neighbor
                                                    //should periodically remove the ones that have expired
-    HashMap<Integer, WeightCalc> neighborEdgeCalcs; // used to calculate costs using send and receive time
-    HashMap<Integer, Long> neighborEdgeWeights; //the costs associated with each neighbor of the owner
-    HashMap<Integer, Stack<Integer>> routingTable; //stores the currently calculated shortest paths from source to all other nodes
+    private HashMap<Integer, WeightCalc> neighborEdgeCalcs; // used to calculate costs using send and receive time
+    private HashMap<Integer, Long> neighborEdgeWeights; //the costs associated with each neighbor of the owner
+    private HashMap<Integer, Stack<Integer>> routingTable; //stores the currently calculated shortest paths from source to all other nodes
     
 
     public LinkStateRouter(int nsap, NetworkInterface nic) {
@@ -325,17 +325,15 @@ public class LinkStateRouter extends Router {
                 {
                     process = true;
                     Stack<Integer> path = this.routingTable.get(t.dest);
-                    try 
-                    {
-                        int nextDest = path.pop(); 
-                        dijkstraRoute(new DijkstraPacket(t.dest, nsap, this.routingTable.get(t.dest), t.payload, 20), nextDest);
+                    Stack<Integer> forPacket = (Stack<Integer>) path.clone();       
+                 try {   
+                        int nextDest = forPacket.pop();          
+                        dijkstraRoute(new DijkstraPacket(t.dest, nsap, forPacket, t.payload, 20), nextDest);
                         t.processed = true; 
-                    }
-                    catch (EmptyStackException e)
-                    {
+                    }  
+                    catch (EmptyStackException e) {
                         t.processed = false;
-                    } 
-                    
+                    }                  
                 }
                 
             }
@@ -349,10 +347,11 @@ public class LinkStateRouter extends Router {
                 if (this.routingTable.containsKey(toSend.destination) && !this.routingTable.get(toSend.destination).isEmpty())
                 {
                     Stack<Integer> path = this.routingTable.get(toSend.destination);
+                    Stack<Integer> forPacket = (Stack<Integer>) path.clone();  
                     try 
                     {
-                        int nextDest = path.pop();
-                        dijkstraRoute(new DijkstraPacket(toSend.destination, nsap, this.routingTable.get(toSend.destination), toSend.data, 2000), nextDest);
+                        int nextDest = forPacket.pop();
+                        dijkstraRoute(new DijkstraPacket(toSend.destination, nsap, forPacket, toSend.data, 2000), nextDest);
                     }
                     catch (EmptyStackException e) { this.toSendList.add(new TransmitRequest(toSend.data, toSend.destination));}
                     
@@ -402,7 +401,7 @@ public class LinkStateRouter extends Router {
                         else 
                         {
                             //packet is too old, we must discard it
-                            debug.println(0, "Packet has too many hops; Router " + nsap + " dropping packet from " + p.source + "intended for " + p.finalDest);
+                            debug.println(1, "Packet has too many hops; Router " + nsap + " dropping packet from " + p.source + "intended for " + p.finalDest);
                         }
                         
                                         

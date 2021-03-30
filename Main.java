@@ -20,7 +20,7 @@ public class Main {
         net.createRouters(new LinkStateRouter.Generator());
         
         try {
-            net.runNetwork(System.out, 10000, 1);
+            net.runNetwork(System.out, 10000, 100);
         } catch (Exception e) {
             System.err.println("Error running the network.");
             System.err.println(e.getMessage());
