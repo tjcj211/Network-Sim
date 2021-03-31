@@ -164,9 +164,10 @@ public class DistanceVectorRouter extends Router {
 
     // Set distance to self to 0 and all other connections to maxInt
     private void initializeRoutingTable(int nsap, NetworkInterface nic) {
+        routingTable = new HashMap<Integer, Integer>();
         routingTable.put(nsap, 0);
         ArrayList<Integer> out = nic.getOutgoingLinks();
-        for (int i = 0; i <= out.size(); i++) {
+        for (int i = 0; i < out.size(); i++) {
             routingTable.put(out.get(i), Integer.MAX_VALUE); // initializes every connection distance to max_value
         }
         changedTable = true;
