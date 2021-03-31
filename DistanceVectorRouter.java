@@ -78,6 +78,8 @@ public class DistanceVectorRouter extends Router {
             if (toSend != null) {
                 // There is something to send out
                 process = true;
+                debug.println(3, "(DistanceVectorRouter.run): I am being asked to transmit: " + toSend.data
+                    + " to the destination: " + toSend.destination);
                 // Send DV to all neighbors if some conditions are met
                 if (changedTable) { // Changes found or router has been dropped
                     HashMap<Integer, Integer> payload = this.routingTable;
@@ -114,9 +116,8 @@ public class DistanceVectorRouter extends Router {
                         debug.println(5, "Packet has too many hops.  Dropping packet from " + p.source + " to " + p.dest
                                 + " by router " + nsap);
                     }
-                }
 
-                if (toRoute.data instanceof RouterPacket) {
+                } else if (toRoute.data instanceof RouterPacket) {
                     RouterPacket p = (RouterPacket) toRoute.data;
                     // For each recieved if has different table, update own table
                     // Check if table is different
@@ -131,9 +132,7 @@ public class DistanceVectorRouter extends Router {
 
                         }
                     }
-                }
-
-                if (toRoute.data instanceof PingPacket) {
+                } else if (toRoute.data instanceof PingPacket) {
                     PingPacket p = (PingPacket) toRoute.data;
                     p.hopCount--;
                     if (p.hopCount == 0) { // Packet has been returned
@@ -144,13 +143,10 @@ public class DistanceVectorRouter extends Router {
                         p.dest = p.source; // Change the destination to the source to be returned
                         routePing(p.source, p);
                     }
+                } else {
+                    debug.println(0, "Error.  The packet being transmitted is not a recognized Packet.  Not processing");
                 }
-
-            } else {
-                debug.println(0, "Error.  The packet being transmitted is not a recognized Packet.  Not processing");
             }
-            debug.println(3, "(DistanceVectorRouter.run): I am being asked to transmit: " + toSend.data
-                    + " to the destination: " + toSend.destination);
 
             if (!process) {
                 // Didn't do anything, so sleep a bit
