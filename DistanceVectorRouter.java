@@ -79,20 +79,19 @@ public class DistanceVectorRouter extends Router {
                 // There is something to send out
                 process = true;
                 debug.println(3, "(DistanceVectorRouter.run): I am being asked to transmit: " + toSend.data
-                    + " to the destination: " + toSend.destination);
+                        + " to the destination: " + toSend.destination);
                 // Send DV to all neighbors if some conditions are met
                 if (changedTable) { // Changes found or router has been dropped
                     HashMap<Integer, Integer> payload = this.routingTable;
                     routeRouter(-1, new RouterPacket(nsap, toSend.destination, 1, payload));
                     changedTable = false;
+                    // Send a PingPacket
+                    PingPacket p = new PingPacket(nsap, toSend.destination, 2, System.currentTimeMillis());
+                    routePing(nsap, p);
                 } else { // No changes found or no routers dropped
                     Object payload = toSend.data;
                     route(-1, new Packet(nsap, toSend.destination, 5, payload));
                 }
-
-                // Send a PingPacket (when?)
-                PingPacket p = new PingPacket(nsap, toSend.destination, 2, System.currentTimeMillis());
-                routePing(nsap, p);
 
                 debug.println(3, "(DistanceVectorRouter.run): I am being asked to transmit: " + toSend.data
                         + " to the destination: " + toSend.destination);
@@ -125,27 +124,28 @@ public class DistanceVectorRouter extends Router {
                     for (Integer key : payloadRoutingTable.keySet()) {
                         // check to see if values are the same
                         if (routingTable.get(key) != payloadRoutingTable.get(key)) {
-
                             // if not, change our value to time to get to neighbor + neighbor values
                             routingTable.put(key, payloadRoutingTable.get(key));
-                            //routingTable.put(key, payloadRoutingTable.get(key) + routingTable.get(p.source));
                             changedTable = true;
-
+                            debug.println(2, "(RouterPacket) Updating Router Table for Router: " + nsap);
                         }
                     }
                 } else if (toRoute.data instanceof PingPacket) {
                     PingPacket p = (PingPacket) toRoute.data;
                     p.hopCount--;
                     if (p.hopCount == 0) { // Packet has been returned
-                        int ping = (int) ((System.currentTimeMillis() - p.ping) / 2); // The ping between two
-                        // routers
+                        // The ping between two routers
+                        int ping = (int) ((System.currentTimeMillis() - p.ping) / 2);
                         routingTable.put(p.source, ping);
+                        changedTable = true;
+                        debug.println(2, "(PingPacket) Recieved ping packet for: " + nsap);
                     } else if (p.hopCount == 1) { // Send back to the original source
                         p.dest = p.source; // Change the destination to the source to be returned
                         routePing(p.source, p);
                     }
                 } else {
-                    debug.println(0, "Error.  The packet being transmitted is not a recognized Packet.  Not processing");
+                    debug.println(0,
+                            "Error.  The packet being transmitted is not a recognized Packet.  Not processing");
                 }
             }
 
@@ -165,13 +165,14 @@ public class DistanceVectorRouter extends Router {
         routingTable.put(nsap, 0);
         ArrayList<Integer> out = nic.getOutgoingLinks();
         for (int i = 0; i < out.size(); i++) {
-            routingTable.put(out.get(i), Integer.MAX_VALUE); // initializes every connection distance to max_value
+            // initializes every connection distance to max_value
+            routingTable.put(out.get(i), Integer.MAX_VALUE);
         }
         changedTable = true;
     }
 
-    //Send an initial ping to each router's neighbors
-    //Unsure if necessary
+    // Send an initial ping to each router's neighbors
+    // Unsure if necessary
     private void initialPing() {
         ArrayList<Integer> outLinks = nic.getOutgoingLinks();
         int size = outLinks.size();
