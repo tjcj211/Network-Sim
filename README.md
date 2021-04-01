@@ -29,6 +29,22 @@ Instructions:
 
 Contributions:
 ------------
+Charles:
+* Designed, Built, and Tested the LinkStateRouter.java file. 
+  * Dijkstra's shortest path algorithm
+  * LSP packet creation and transmission to all routers on network
+  * Recalculation of PING periodically to construct new LSP (before old ones expire)
+* Wrote the "Instructions" section in the README
+
+Timothy:
+
+Ryan:  
+
+Griffin:  
+
+Lauren:  
 
 Process for Distributing Tasks:
 ------------
+
+Charles focused entirely on implementing the Link State Routing algorithm.  Tim and Ryan collaborated to build the Distance Vector Routing algorithm.  
