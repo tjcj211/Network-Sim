@@ -7,6 +7,7 @@
  ***************/
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Map;
 
 public class DistanceVectorRouter extends Router {
     // A generator for the given DistanceVectorRouter class
@@ -66,10 +67,11 @@ public class DistanceVectorRouter extends Router {
     public DistanceVectorRouter(int nsap, NetworkInterface nic) {
         super(nsap, nic);
         debug = Debug.getInstance(); // For debugging!
-        initializeRoutingTable(nsap, nic);
+
     }
 
     public void run() {
+        initializeRoutingTable(nsap, nic);
         initialPing();
         while (true) {
             // See if there is anything to process
@@ -165,6 +167,7 @@ public class DistanceVectorRouter extends Router {
         routingTable.put(nsap, 0);
         ArrayList<Integer> out = nic.getOutgoingLinks();
         for (int i = 0; i < out.size(); i++) {
+            debug.println(2, "(initializeRoutingTable) Adding route " + out.get(i) + " to routing Table " + nsap);
             // initializes every connection distance to max_value
             routingTable.put(out.get(i), Integer.MAX_VALUE);
         }
@@ -195,14 +198,14 @@ public class DistanceVectorRouter extends Router {
      * originator
      **/
     private void route(int linkOriginator, Packet p) {
-        ArrayList<Integer> outLinks = nic.getOutgoingLinks();
-        int size = outLinks.size();
-        for (int i = 0; i < size; i++) {
-            if (outLinks.get(i) != linkOriginator) {
-                // Not the originator of this packet - so send it along!
-                nic.sendOnLink(i, p);
+        debug.println(2, "ROUTE: " + p.source);
+        int min = Integer.MAX_VALUE;
+        for (Integer key : routingTable.keySet()) {
+            if (routingTable.get(key) < min) {
+                min = routingTable.get(key);
             }
         }
+        nic.sendOnLink(min, p);
     }
 
     /**
