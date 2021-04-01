@@ -61,6 +61,7 @@ public class DistanceVectorRouter extends Router {
 
     Debug debug;
     private HashMap<Integer, Integer> routingTable; // Stores all connections and their costs
+    boolean changedTable = false;
 
     public DistanceVectorRouter(int nsap, NetworkInterface nic) {
         super(nsap, nic);
@@ -68,9 +69,8 @@ public class DistanceVectorRouter extends Router {
         initializeRoutingTable(nsap, nic);
     }
 
-    boolean changedTable = false;
-
     public void run() {
+        initialPing();
         while (true) {
             // See if there is anything to process
             boolean process = false;
@@ -127,7 +127,8 @@ public class DistanceVectorRouter extends Router {
                         if (routingTable.get(key) != payloadRoutingTable.get(key)) {
 
                             // if not, change our value to time to get to neighbor + neighbor values
-                            routingTable.put(key, payloadRoutingTable.get(key) + routingTable.get(p.source));
+                            routingTable.put(key, payloadRoutingTable.get(key));
+                            //routingTable.put(key, payloadRoutingTable.get(key) + routingTable.get(p.source));
                             changedTable = true;
 
                         }
@@ -167,6 +168,21 @@ public class DistanceVectorRouter extends Router {
             routingTable.put(out.get(i), Integer.MAX_VALUE); // initializes every connection distance to max_value
         }
         changedTable = true;
+    }
+
+    //Send an initial ping to each router's neighbors
+    //Unsure if necessary
+    private void initialPing() {
+        ArrayList<Integer> outLinks = nic.getOutgoingLinks();
+        int size = outLinks.size();
+        for (int i = 0; i < size; i++) { //
+            for (int j = 0; j < size; j++) {
+                if (outLinks.get(j) != i) {
+                    PingPacket p = new PingPacket(i, j, 2, System.currentTimeMillis());
+                    routePing(i, p);
+                }
+            }
+        }
     }
 
     public HashMap<Integer, Integer> getRoutingTable() {
