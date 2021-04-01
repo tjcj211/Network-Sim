@@ -89,10 +89,10 @@ public class DistanceVectorRouter extends Router {
                     changedTable = false;
                     // Send a PingPacket
                     PingPacket p = new PingPacket(nsap, toSend.destination, 2, System.currentTimeMillis());
-                    routePing(nsap, p);
+                    routePing(-1, p);
                 } else { // No changes found or no routers dropped
                     Object payload = toSend.data;
-                    route(-1, new Packet(nsap, toSend.destination, 5, payload));
+                    route(-1, new Packet(nsap, toSend.destination, 6, payload));
                 }
 
                 debug.println(3, "(DistanceVectorRouter.run): I am being asked to transmit: " + toSend.data
@@ -138,9 +138,10 @@ public class DistanceVectorRouter extends Router {
                     if (p.hopCount == 0) { // Packet has been returned
                         // The ping between two routers
                         int ping = (int) ((System.currentTimeMillis() - p.ping) / 2);
+                        System.out.println("Ping Packet: " + ping);
                         routingTable.put(p.source, ping);
                         changedTable = true;
-                        debug.println(2, "(PingPacket) Recieved ping packet for: " + nsap);
+                        debug.println(2, "(PingPacket) received ping packet for: " + nsap);
                     } else if (p.hopCount == 1) { // Send back to the original source
                         p.dest = p.source; // Change the destination to the source to be returned
                         routePing(p.source, p);
@@ -179,13 +180,9 @@ public class DistanceVectorRouter extends Router {
     private void initialPing() {
         ArrayList<Integer> outLinks = nic.getOutgoingLinks();
         int size = outLinks.size();
-        for (int i = 0; i < size; i++) { //
-            for (int j = 0; j < size; j++) {
-                if (outLinks.get(j) != i) {
-                    PingPacket p = new PingPacket(i, j, 2, System.currentTimeMillis());
-                    routePing(i, p);
-                }
-            }
+        for (int i = 0; i < size; i++) {
+            PingPacket p = new PingPacket(nsap, i, 2, System.currentTimeMillis());
+            routePing(-1, p);
         }
     }
 
@@ -198,6 +195,7 @@ public class DistanceVectorRouter extends Router {
      * originator
      **/
     private void route(int linkOriginator, Packet p) {
+        ArrayList<Integer> outLinks = nic.getOutgoingLinks();
         debug.println(2, "ROUTE: " + p.source);
         int min = Integer.MAX_VALUE;
         for (Integer key : routingTable.keySet()) {
@@ -217,13 +215,10 @@ public class DistanceVectorRouter extends Router {
         int size = outLinks.size();
         for (int i = 0; i < size; i++) {
             if (p.hopCount == 2) { // Send to destination to check ping
-                if (outLinks.get(i) == p.dest) {
-                    nic.sendOnLink(p.dest, p);
-                }
+                System.out.println(outLinks.get(i) + ":" + p.dest);
+                nic.sendOnLink(p.dest, p);
             } else { // Send back to source
-                if (outLinks.get(i) == linkOriginator) {
-                    nic.sendOnLink(linkOriginator, p);
-                }
+                nic.sendOnLink(linkOriginator, p);
             }
         }
     }
