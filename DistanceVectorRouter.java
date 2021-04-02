@@ -7,7 +7,6 @@
  ***************/
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.Map;
 
 public class DistanceVectorRouter extends Router {
     // A generator for the given DistanceVectorRouter class
@@ -21,12 +20,14 @@ public class DistanceVectorRouter extends Router {
         // This is how we will store our Packet Header information
         int source;
         int dest;
+        int previous;
         int hopCount; // Maximum hops to get there
         Object payload; // The payload!
 
-        public Packet(int source, int dest, int hopCount, Object payload) {
+        public Packet(int source, int dest, int previous, int hopCount, Object payload) {
             this.source = source;
             this.dest = dest;
+            this.previous = previous;
             this.hopCount = hopCount;
             this.payload = payload;
         }
@@ -61,7 +62,9 @@ public class DistanceVectorRouter extends Router {
     }
 
     Debug debug;
-    private HashMap<Integer, Integer> routingTable; // Stores all connections and their costs
+    // Stores all connections and their costs
+    private HashMap<Integer, Integer> routingTable;
+    private HashMap<Integer, HashMap<Integer, Integer>> masterRoutingTable;
     boolean changedTable = false;
 
     public DistanceVectorRouter(int nsap, NetworkInterface nic) {
@@ -92,11 +95,8 @@ public class DistanceVectorRouter extends Router {
                     routePing(-1, p);
                 } else { // No changes found or no routers dropped
                     Object payload = toSend.data;
-                    route(-1, new Packet(nsap, toSend.destination, 6, payload));
+                    route(-1, new Packet(nsap, toSend.destination, nsap, 7, payload));
                 }
-
-                debug.println(3, "(DistanceVectorRouter.run): I am being asked to transmit: " + toSend.data
-                        + " to the destination: " + toSend.destination);
             }
 
             NetworkInterface.ReceivePair toRoute = nic.getReceived();
@@ -138,9 +138,10 @@ public class DistanceVectorRouter extends Router {
                     if (p.hopCount == 0) { // Packet has been returned
                         // The ping between two routers
                         int ping = (int) ((System.currentTimeMillis() - p.ping) / 2);
-                        System.out.println("Ping Packet: " + ping);
-                        routingTable.put(p.source, ping);
-                        changedTable = true;
+                        if (routingTable.get(p.source) == null || routingTable.get(p.source) > ping) {
+                            routingTable.put(p.source, ping);
+                            changedTable = true;
+                        }
                         debug.println(2, "(PingPacket) received ping packet for: " + nsap);
                     } else if (p.hopCount == 1) { // Send back to the original source
                         p.dest = p.source; // Change the destination to the source to be returned
@@ -164,13 +165,23 @@ public class DistanceVectorRouter extends Router {
 
     // Set distance to self to 0 and all other connections to maxInt
     private void initializeRoutingTable(int nsap, NetworkInterface nic) {
+        masterRoutingTable = new HashMap<Integer, HashMap<Integer, Integer>>();
         routingTable = new HashMap<Integer, Integer>();
+
         routingTable.put(nsap, 0);
+        masterRoutingTable.put(nsap, routingTable); // Initialize 2d Table
+
         ArrayList<Integer> out = nic.getOutgoingLinks();
         for (int i = 0; i < out.size(); i++) {
             debug.println(2, "(initializeRoutingTable) Adding route " + out.get(i) + " to routing Table " + nsap);
             // initializes every connection distance to max_value
-            routingTable.put(out.get(i), Integer.MAX_VALUE);
+            // Initialize table column for neighbors
+            if (masterRoutingTable.get(out.get(i)) == null) {
+                routingTable.put(out.get(i), Integer.MAX_VALUE);
+                masterRoutingTable.put(out.get(i), routingTable);
+                // Check speed
+                // mrt.get(nsap).put(D, mrt.get(nsap).get(C) + mrt.get(C).get(D))
+            }
         }
         changedTable = true;
     }
@@ -196,14 +207,21 @@ public class DistanceVectorRouter extends Router {
      **/
     private void route(int linkOriginator, Packet p) {
         ArrayList<Integer> outLinks = nic.getOutgoingLinks();
-        debug.println(2, "ROUTE: " + p.source);
         int min = Integer.MAX_VALUE;
+        int minKey = (int) routingTable.keySet().toArray()[0];
         for (Integer key : routingTable.keySet()) {
-            if (routingTable.get(key) < min) {
+            if (routingTable.get(key) < min && outLinks.contains(key)) {
                 min = routingTable.get(key);
+                minKey = key;
             }
         }
-        nic.sendOnLink(min, p);
+
+        for (int i = 0; i < outLinks.size(); i++) {
+            if (outLinks.get(i) == minKey && outLinks.get(i) != linkOriginator) {
+                p.previous = minKey;
+                nic.sendOnLink(i, p);
+            }
+        }
     }
 
     /**
@@ -215,7 +233,6 @@ public class DistanceVectorRouter extends Router {
         int size = outLinks.size();
         for (int i = 0; i < size; i++) {
             if (p.hopCount == 2) { // Send to destination to check ping
-                System.out.println(outLinks.get(i) + ":" + p.dest);
                 nic.sendOnLink(p.dest, p);
             } else { // Send back to source
                 nic.sendOnLink(linkOriginator, p);
