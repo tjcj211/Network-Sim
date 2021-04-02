@@ -139,7 +139,7 @@ public class DistanceVectorRouter extends Router {
                         // The ping between two routers
                         int ping = (int) ((System.currentTimeMillis() - p.ping) / 2);
                         if (routingTable.get(p.source) == null || routingTable.get(p.source) > ping) {
-                            routingTable.put(p.source, ping);
+                            masterRoutingTable.get(p.source).put(p.dest, ping);
                             changedTable = true;
                         }
                         debug.println(2, "(PingPacket) received ping packet for: " + nsap);
@@ -161,6 +161,26 @@ public class DistanceVectorRouter extends Router {
                 }
             }
         }
+    }
+
+    // Returns the key to the shortest path
+    private int[] calculateFastestNeighbor(int destination) {
+        HashMap<Integer, Integer> destinationTable = masterRoutingTable.get(destination);
+        int key = 0;// (int) destinationTable.keySet().toArray()[0]; // Pick the first key as the
+                    // fastest
+        int minSpeed = Integer.MAX_VALUE;
+        for (int destinations : masterRoutingTable.keySet()) {
+            for (int fastestPath : destinationTable.keySet()) {
+                if (destinationTable.get(fastestPath) + masterRoutingTable.get(nsap).get(destinations) < minSpeed) {
+                    key = destinationTable.get(fastestPath) + masterRoutingTable.get(nsap).get(destinations);
+                    minSpeed = destinationTable.get(key);
+                }
+            }
+        }
+        int[] arr = { key, minSpeed };
+        // x to y = min {neighbors distance to y + my distance to that neighbor}
+        // x to y = min {distance from x to neighbor + neighbor to y}
+        return arr;
     }
 
     // Set distance to self to 0 and all other connections to maxInt
@@ -207,14 +227,11 @@ public class DistanceVectorRouter extends Router {
      **/
     private void route(int linkOriginator, Packet p) {
         ArrayList<Integer> outLinks = nic.getOutgoingLinks();
-        int min = Integer.MAX_VALUE;
-        int minKey = (int) routingTable.keySet().toArray()[0];
-        for (Integer key : routingTable.keySet()) {
-            if (routingTable.get(key) < min && outLinks.contains(key)) {
-                min = routingTable.get(key);
-                minKey = key;
-            }
-        }
+        // int min = Integer.MAX_VALUE;
+        // int minKey = (int) routingTable.keySet().toArray()[0];
+        int[] keySpeed = calculateFastestNeighbor(p.dest);
+        int min = keySpeed[1];
+        int minKey = keySpeed[0];
 
         for (int i = 0; i < outLinks.size(); i++) {
             if (outLinks.get(i) == minKey && outLinks.get(i) != linkOriginator) {
