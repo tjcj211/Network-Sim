@@ -30,8 +30,10 @@ Instructions:
 Contributions:
 ------------
 Charles:
+* Setup LinkStateDev branch in GitHub repository for developing the Link State Routing algorithm.
 * Designed, Built, and Tested the LinkStateRouter.java file. 
   * Dijkstra's shortest path algorithm
+  * Construction of Routing Table
   * LSP packet creation and transmission to all routers on network
   * Recalculation of PING periodically to construct new LSP (before old ones expire)
 * Wrote the "Instructions" section in the README
@@ -47,4 +49,4 @@ Lauren:
 Process for Distributing Tasks:
 ------------
 
-Charles focused entirely on implementing the Link State Routing algorithm.  Tim and Ryan collaborated to build the Distance Vector Routing algorithm.  
+We did not have a formal methodology for task distribution.  At the start of the project, team members made it clear which routing algorithm they desired to build.  A separate development branch in GitHub was setup for each routing algorithm.  In addition, the team established a group chat early on to share progress, issues, and/or updates among all members.  The intention to perform a specific task was announced and recognized by all other group members by sending a request in the chat.  The development for both routing algorithms was done entirely separately; each algorithm had its own designated branch in the GitHub repository.   
