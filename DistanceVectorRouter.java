@@ -36,7 +36,7 @@ public class DistanceVectorRouter extends Router {
 //duncans
     public void run() {
     	//add a 0.5sec delay
-        int delay=100; 
+        int delay=1000; 
         long currentTime= System.currentTimeMillis();
         long timeToRebuild = currentTime + delay;
 
@@ -84,7 +84,7 @@ public class DistanceVectorRouter extends Router {
                     System.out.println(p.sendBack);
                 }
                 */
-                Packet p = new Packet(nsap, toSend.destination, 60, toSend.data);
+                Packet p = new Packet(nsap, toSend.destination, 10, toSend.data);
                 if (this.routingMap.containsKey(toSend.destination) && this.routingMap.get(toSend.destination) != null)
                 {
                     route(p);
