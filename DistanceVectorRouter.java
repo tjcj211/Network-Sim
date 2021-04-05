@@ -1,12 +1,13 @@
-
 /***************
  * DistanceVectorRouter
  * Author: Christian Duncan
- * Modified by: Tim Carta and Ryan Hayes
+ * Modified by: Charles Rescanski and Lauren Atkinson
  * Represents a router that uses a Distance Vector Routing algorithm.
+ * buildTable function: (screenshot)
  ***************/
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedList;
 
 public class DistanceVectorRouter extends Router {
     // A generator for the given DistanceVectorRouter class
@@ -15,256 +16,292 @@ public class DistanceVectorRouter extends Router {
             return new DistanceVectorRouter(id, nic);
         }
     }
+//duncans
+    Debug debug;
+    HashMap<Integer,DvPair> routingMap;
+    ArrayList<HashMap<Integer,DvPair>>neighborMaps;
+    LinkedList<Packet> transmitQueue;
+
+    // create a private class to create a tuple to store hashmap values -- faster than a list/array
+    public DistanceVectorRouter(int nsap, NetworkInterface nic) {
+        super(nsap, nic);
+        debug = Debug.getInstance();  // For debugging
+        routingMap= new HashMap<>();  //
+        this.transmitQueue = new LinkedList<Packet>();
+        neighborMaps= new ArrayList<>(nic.getOutgoingLinks().size());
+        for(int i=0;i<nic.getOutgoingLinks().size();i++){
+            neighborMaps.add(null);
+        }
+    }
+//duncans
+    public void run() {
+    	//add a 0.5sec delay
+        int delay=100; 
+        long currentTime= System.currentTimeMillis();
+        long timeToRebuild = currentTime + delay;
+
+        //routing map should initially have a distance of 0 to itself and a distance of infinity to all neighbors
+        //initially, it will only have entries for its neighbors because it doesn't know about any other routers
+        DvPair itself= new DvPair(0,-1);
+        routingMap.put(nsap,itself);
+        ArrayList<Integer> outLinks = nic.getOutgoingLinks();
+        int size = outLinks.size();
+        for (int i = 0; i < size; i++) {
+            routingMap.put(outLinks.get(i), new DvPair(Integer.MAX_VALUE, i));
+        }
+      
+
+        while (true) {
+            currentTime=System.currentTimeMillis();
+            if(currentTime > timeToRebuild){
+                timeToRebuild = currentTime + delay;
+                buildTable(nsap);
+            }
+
+            //route out old packets that we couldn't transmit before
+            int index = 0;
+            while (index < this.transmitQueue.size())
+            {
+                int dest = transmitQueue.get(index).dest;
+                if (routingMap.containsKey(dest) && routingMap.get(dest) != null)
+                {
+                    this.route(transmitQueue.get(index));
+                    this.transmitQueue.remove(index);
+                }
+                else
+                {
+                    index ++;
+                }
+            }
+            //duncans
+            // check for anything to process
+            boolean process = false;
+            NetworkInterface.TransmitPair toSend = nic.getTransmit();
+            if (toSend != null) {
+                /*
+                if (toSend.data instanceof DistanceVectorRouter.PingPacket) {
+                    DistanceVectorRouter.PingPacket p = (DistanceVectorRouter.PingPacket) toSend.data;
+                    System.out.println(p.sendBack);
+                }
+                */
+                Packet p = new Packet(nsap, toSend.destination, 60, toSend.data);
+                if (this.routingMap.containsKey(toSend.destination) && this.routingMap.get(toSend.destination) != null)
+                {
+                    route(p);
+                }
+                else
+                {
+                    this.transmitQueue.add(p);
+                }
+                // something should be be sent out 
+                process = true;
+                debug.println(3, "(DistanceVectorRouter.run): I am being asked to transmit: " + toSend.data + " to the destination: " + toSend.destination);
+            }
+            //duncans
+            NetworkInterface.ReceivePair toRoute = nic.getReceived();
+            if (toRoute != null) {
+                //route or destinatiokn 
+                process = true;
+                if(toRoute.data instanceof DvPacket){
+                    int linkIndex= getLinkIndex(toRoute.originator);
+                    debug.println(3, nsap +":just a hashmap to neighbor: " +toRoute.originator +" "+linkIndex);
+                    DvPacket packet=(DvPacket) toRoute.data;
+                    neighborMaps.set(linkIndex,packet.mapToSend);
+                }
+                
+                else if (toRoute.data instanceof DistanceVectorRouter.PingPacket) {
+                    DistanceVectorRouter.PingPacket p = (DistanceVectorRouter.PingPacket) toRoute.data;
+                    if (p.sendBack == false) {
+                        p.sendBack =true;
+                        PingTest(toRoute.originator,p);
+                    }
+                   // need to figure out how to use linkindex -- maybe as dylan or harrison 
+                    else {
+                    	//figure out the distance using the table
+                        long startTime = p.time;
+                        long endTime = System.currentTimeMillis();
+                        long dist = (endTime - startTime)/2;
+                        int linkInd = nic.getOutgoingLinks().indexOf(toRoute.originator);
+                        routingMap.put(toRoute.originator, new DvPair(dist, linkInd));
+                        debug.println(3, "LinkInd(Park):"+linkInd);
+                        
+                    }
+                }
+                else if (toRoute.data instanceof Packet) {
+                    Packet p = (Packet) toRoute.data;
+                    if (p.dest == nsap)
+                    {
+                        // It made it!  Inform the "network" for statistics tracking purposes
+                        debug.println(4, "(FloodRouter.run): Packet has arrived!  Reporting to the NIC - for accounting purposes!");
+                        debug.println(6, "(FloodRouter.run): Payload: " + p.payload);
+                        nic.trackArrivals(p.payload);
+                    }
+                    else if (p.hopCount > 0)
+                    {   
+                        p.hopCount --;
+                        //we have more routing to do
+                        if (this.routingMap.containsKey(p.dest) && routingMap.get(p.dest) != null)
+                        {
+                            this.route(p);
+                        }
+                        else
+                        {
+                            this.transmitQueue.add(p);
+                        }
+                    }
+                    else
+                    {
+                        debug.println(5, "Packet has too many hops.  Dropping packet from " + p.source + " to " + p.dest + " by router " + nsap);
+              
+                    }
+
+                }
+                else
+                {
+                    debug.println(4, "Error.  The packet being tranmitted is not a recognized DistanceVector Packet.  Not processing");
+                }
+            }
+           
+            //duncans
+            if (!process) {
+                // mini time out 
+                try { Thread.sleep(1); } catch (InterruptedException e) { }
+            }
+        }
+    }
+// use a method within a timer to add a delay 
+//should use a hashmap or arraylist -- possible both to store the values     
+    public void buildTable(int nsap){
+    	//create an arraylist of  index and NSAP going out 
+        ArrayList<Integer>linkIndex=nic.getOutgoingLinks();
+        //use ping to get the distance from  router
+        for(int i: nic.getOutgoingLinks()){
+            PingTest(i,new PingPacket(System.currentTimeMillis(),false));
+        }
+
+        //update our map using the neighbor maps to store the minimum known distance to each destination
+        for (int i = 0; i < this.neighborMaps.size(); i++)
+        {
+            int neighborId = linkIndex.get(i);
+            int link = i;
+            if (this.neighborMaps.get(link) != null)
+            {
+                this.neighborMaps.get(link).forEach((destId, valuePair) ->
+                {
+                    if (!this.routingMap.containsKey(destId) || this.routingMap.get(destId) == null || this.routingMap.get(neighborId).distance + valuePair.distance < this.routingMap.get(destId).distance)
+                    {
+
+                        this.routingMap.put(destId, new DvPair(this.routingMap.get(neighborId).distance + valuePair.distance, link));
+                    }
+                });
+            }
+            
+        }
+
+        //debug.println(0, "The Map: " + this.routingMap);
+
+        /*
+        HashMap<Integer,DvPair> tempMap=new HashMap<>();//initialize temp map and add to it 
+        DvPair itself= new DvPair(0,-1);
+        tempMap.put(nsap,itself);
+
+        for ()
+        if(nsap==14){ 
+            debug.println(3, "yeah this happened");
+            for(int i=0; i<neighborMaps.size();i++){
+                HashMap<Integer, DvPair> map= neighborMaps.get(i);
+                debug.println(3, "linkIndex: " +i);
+                if(map!=null)
+                    map.forEach((n,dvp) -> debug.println(3,"   "+n+ " "+dvp.distance));
+            }
+        }
+        else{
+            debug.println(3, "nope try again");
+        }
+        */
+        //hashmap to router
+        ////special packet w contains map the needs to be sent to the neighboring router 
+        //if
+        boolean sendMap = true;
+        for(int i=0;i<linkIndex.size();i++){
+            if (this.routingMap.get(linkIndex.get(i)).distance == Integer.MAX_VALUE)
+            {
+                sendMap = false;
+            }
+        }
+        if (sendMap)
+        {
+            for(int i=0;i<linkIndex.size();i++){
+                DvPacket mapPacket = new DvPacket((HashMap<Integer, DvPair>) this.routingMap.clone());
+                nic.sendOnLink(i, mapPacket);
+            }
+        }
+
+    }
+    private int getLinkIndex(int nsap){
+        ArrayList<Integer> outLinks= nic.getOutgoingLinks();
+        return outLinks.indexOf(nsap);
+    }
+   
+    //Custom packet class that holds hashmap that will be sent to a router's direct neighbor(s)
+    public static class DvPacket {
+        HashMap<Integer,DvPair> mapToSend;
+        //the hashmap is the only thing that the neighbors need receive from the router
+        public DvPacket(HashMap<Integer,DvPair> mapToSend) {
+            this.mapToSend=mapToSend;
+        }
+    }
+    
+    //class to make our little tuple for the hashmap
+    public class DvPair {
+        double distance;
+        int linkIndex;
+        public DvPair(double distance, int linkIndex) {
+                 this.distance = distance;
+                 this.linkIndex = linkIndex;
+        }
+    }
 
     public static class Packet {
         // This is how we will store our Packet Header information
         int source;
         int dest;
-        int previous;
-        int hopCount; // Maximum hops to get there
-        Object payload; // The payload!
+        int hopCount;
+        Object payload;  // The payload!
 
-        public Packet(int source, int dest, int previous, int hopCount, Object payload) {
+        public Packet(int source, int dest, int hopCount, Object payload) {
             this.source = source;
             this.dest = dest;
-            this.previous = previous;
             this.hopCount = hopCount;
             this.payload = payload;
         }
     }
 
     public static class PingPacket {
-        int source;
-        int dest;
-        int hopCount;
-        long ping;
-
-        public PingPacket(int source, int dest, int hopCount, long ping) {
-            this.source = source;
-            this.dest = dest;
-            this.hopCount = hopCount;
-            this.ping = ping;
+        long time;  //time
+        boolean sendBack;
+        
+        public PingPacket(long time, boolean sendBack) {
+            this.time = time;
+            this.sendBack = sendBack;
         }
     }
-
-    public static class RouterPacket {
-        int source;
-        int dest;
-        int hopCount;
-        HashMap<Integer, Integer> payload;
-
-        public RouterPacket(int source, int dest, int hopCount, HashMap<Integer, Integer> payload) {
-            this.source = source;
-            this.dest = dest;
-            this.hopCount = hopCount;
-            this.payload = payload;
-        }
-    }
-
-    Debug debug;
-    // Stores all connections and their costs
-    private HashMap<Integer, Integer> routingTable;
-    private HashMap<Integer, HashMap<Integer, Integer>> masterRoutingTable;
-    boolean changedTable = false;
-
-    public DistanceVectorRouter(int nsap, NetworkInterface nic) {
-        super(nsap, nic);
-        debug = Debug.getInstance(); // For debugging!
-
-    }
-
-    public void run() {
-        initializeRoutingTable(nsap, nic);
-        initialPing();
-        while (true) {
-            // See if there is anything to process
-            boolean process = false;
-            NetworkInterface.TransmitPair toSend = nic.getTransmit();
-            if (toSend != null) {
-                // There is something to send out
-                process = true;
-                debug.println(3, "(DistanceVectorRouter.run): I am being asked to transmit: " + toSend.data
-                        + " to the destination: " + toSend.destination);
-                // Send DV to all neighbors if some conditions are met
-                if (changedTable) { // Changes found or router has been dropped
-                    HashMap<Integer, Integer> payload = this.routingTable;
-                    routeRouter(-1, new RouterPacket(nsap, toSend.destination, 1, payload));
-                    changedTable = false;
-                    // Send a PingPacket
-                    PingPacket p = new PingPacket(nsap, toSend.destination, 2, System.currentTimeMillis());
-                    routePing(-1, p);
-                } else { // No changes found or no routers dropped
-                    Object payload = toSend.data;
-                    route(-1, new Packet(nsap, toSend.destination, nsap, 7, payload));
-                }
-            }
-
-            NetworkInterface.ReceivePair toRoute = nic.getReceived();
-            if (toRoute != null) {
-                // There is something to route through - or it might have arrived at destination
-                process = true;
-                if (toRoute.data instanceof Packet) {
-                    Packet p = (Packet) toRoute.data;
-                    if (p.dest == nsap) {
-                        debug.println(4,
-                                "(DistanceVectorRouter.run): Packet has arrived!  Reporting to the NIC - for accounting purposes!");
-                        debug.println(6, "(DistanceVectorRouter.run): Payload: " + p.payload);
-                        nic.trackArrivals(p.payload);
-                    } else if (p.hopCount > 0) {
-                        p.hopCount--;
-                        route(toRoute.originator, p);
-                    } else {
-                        debug.println(5, "Packet has too many hops.  Dropping packet from " + p.source + " to " + p.dest
-                                + " by router " + nsap);
-                    }
-
-                } else if (toRoute.data instanceof RouterPacket) {
-                    RouterPacket p = (RouterPacket) toRoute.data;
-                    // For each recieved if has different table, update own table
-                    // Check if table is different
-                    HashMap<Integer, Integer> payloadRoutingTable = p.payload;
-                    for (Integer key : payloadRoutingTable.keySet()) {
-                        // check to see if values are the same
-                        if (routingTable.get(key) != payloadRoutingTable.get(key)) {
-                            // if not, change our value to time to get to neighbor + neighbor values
-                            routingTable.put(key, payloadRoutingTable.get(key));
-                            changedTable = true;
-                            debug.println(2, "(RouterPacket) Updating Router Table for Router: " + nsap);
-                        }
-                    }
-                } else if (toRoute.data instanceof PingPacket) {
-                    PingPacket p = (PingPacket) toRoute.data;
-                    p.hopCount--;
-                    if (p.hopCount == 0) { // Packet has been returned
-                        // The ping between two routers
-                        int ping = (int) ((System.currentTimeMillis() - p.ping) / 2);
-                        if (routingTable.get(p.source) == null || routingTable.get(p.source) > ping) {
-                            masterRoutingTable.get(p.source).put(p.dest, ping);
-                            changedTable = true;
-                        }
-                        debug.println(2, "(PingPacket) received ping packet for: " + nsap);
-                    } else if (p.hopCount == 1) { // Send back to the original source
-                        p.dest = p.source; // Change the destination to the source to be returned
-                        routePing(p.source, p);
-                    }
-                } else {
-                    debug.println(0,
-                            "Error.  The packet being transmitted is not a recognized Packet.  Not processing");
-                }
-            }
-
-            if (!process) {
-                // Didn't do anything, so sleep a bit
-                try {
-                    Thread.sleep(1);
-                } catch (InterruptedException e) {
-                }
-            }
-        }
-    }
-
-    // Returns the key to the shortest path
-    private int[] calculateFastestNeighbor(int destination) {
-        HashMap<Integer, Integer> destinationTable = masterRoutingTable.get(destination);
-        int key = 0;// (int) destinationTable.keySet().toArray()[0]; // Pick the first key as the
-                    // fastest
-        int minSpeed = Integer.MAX_VALUE;
-        for (int destinations : masterRoutingTable.keySet()) {
-            for (int fastestPath : destinationTable.keySet()) {
-                if (destinationTable.get(fastestPath) + masterRoutingTable.get(nsap).get(destinations) < minSpeed) {
-                    key = destinationTable.get(fastestPath) + masterRoutingTable.get(nsap).get(destinations);
-                    minSpeed = destinationTable.get(key);
-                }
-            }
-        }
-        int[] arr = { key, minSpeed };
-        // x to y = min {neighbors distance to y + my distance to that neighbor}
-        // x to y = min {distance from x to neighbor + neighbor to y}
-        return arr;
-    }
-
-    // Set distance to self to 0 and all other connections to maxInt
-    private void initializeRoutingTable(int nsap, NetworkInterface nic) {
-        masterRoutingTable = new HashMap<Integer, HashMap<Integer, Integer>>();
-        routingTable = new HashMap<Integer, Integer>();
-
-        routingTable.put(nsap, 0);
-        masterRoutingTable.put(nsap, routingTable); // Initialize 2d Table
-
-        ArrayList<Integer> out = nic.getOutgoingLinks();
-        for (int i = 0; i < out.size(); i++) {
-            debug.println(2, "(initializeRoutingTable) Adding route " + out.get(i) + " to routing Table " + nsap);
-            // initializes every connection distance to max_value
-            // Initialize table column for neighbors
-            if (masterRoutingTable.get(out.get(i)) == null) {
-                routingTable.put(out.get(i), Integer.MAX_VALUE);
-                masterRoutingTable.put(out.get(i), routingTable);
-                // Check speed
-                // mrt.get(nsap).put(D, mrt.get(nsap).get(C) + mrt.get(C).get(D))
-            }
-        }
-        changedTable = true;
-    }
-
-    // Send an initial ping to each router's neighbors
-    // Unsure if necessary
-    private void initialPing() {
+    
+//send to the next link based on the shortest path
+    private void route(Packet p) {
+        int link = this.routingMap.get(p.dest).linkIndex;
         ArrayList<Integer> outLinks = nic.getOutgoingLinks();
-        int size = outLinks.size();
-        for (int i = 0; i < size; i++) {
-            PingPacket p = new PingPacket(nsap, i, 2, System.currentTimeMillis());
-            routePing(-1, p);
-        }
+        nic.sendOnLink(link, p);
     }
-
-    public HashMap<Integer, Integer> getRoutingTable() {
-        return routingTable;
-    }
-
-    /**
-     * Route the given packet out. In our case, we go to all nodes except the
-     * originator
-     **/
-    private void route(int linkOriginator, Packet p) {
-        ArrayList<Integer> outLinks = nic.getOutgoingLinks();
-        // int min = Integer.MAX_VALUE;
-        // int minKey = (int) routingTable.keySet().toArray()[0];
-        int[] keySpeed = calculateFastestNeighbor(p.dest);
-        int min = keySpeed[1];
-        int minKey = keySpeed[0];
-
-        for (int i = 0; i < outLinks.size(); i++) {
-            if (outLinks.get(i) == minKey && outLinks.get(i) != linkOriginator) {
-                p.previous = minKey;
-                nic.sendOnLink(i, p);
+//not mine
+    public void PingTest(int dest, PingPacket PP) {
+         ArrayList<Integer> outGo = nic.getOutgoingLinks();
+         int size = outGo.size();
+         for (int i = 0; i < size; i++) {
+            if (outGo.get(i) == dest) {
+                nic.sendOnLink(i, PP);
             }
         }
     }
 
-    /**
-     * Route the PingPacket Send back to the original source or pass to the
-     * destination
-     **/
-    private void routePing(int linkOriginator, PingPacket p) {
-        ArrayList<Integer> outLinks = nic.getOutgoingLinks();
-        int size = outLinks.size();
-        for (int i = 0; i < size; i++) {
-            if (p.hopCount == 2) { // Send to destination to check ping
-                nic.sendOnLink(p.dest, p);
-            } else { // Send back to source
-                nic.sendOnLink(linkOriginator, p);
-            }
-        }
-    }
-
-    private void routeRouter(int linkOriginator, RouterPacket p) {
-        ArrayList<Integer> outLinks = nic.getOutgoingLinks();
-        int size = outLinks.size();
-        for (int i = 0; i < size; i++) {
-            if (outLinks.get(i) != linkOriginator) {
-                // Not the originator of this packet - so send it along!
-                nic.sendOnLink(i, p);
-            }
-        }
-    }
 }
