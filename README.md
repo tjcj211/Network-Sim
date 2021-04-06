@@ -37,14 +37,23 @@ Charles:
   * LSP packet creation and transmission to all routers on network
   * Recalculation of PING periodically to construct new LSP (before old ones expire)
 * Wrote the "Instructions" section in the README
+* Implemented PHASE 2 of DistanceVectorRouter.java
+  * Fixed Tim and Ryan's calculation of routing table
+  * In old version, best link was calculated from neighbor tables every time a route needed to be made.
+  * In new version, optimal link for all known destination nodes is computed in routing table every time it is reconstructed. 
 
 Timothy:
+* Built PHASE 1 implementation of DV
 
 Ryan:  
+* Built PHASE 1 implementation of DV
 
 Griffin:  
+* Helped test both routing algorithms to ensure optimal performance
 
 Lauren:  
+* Helped implement PHASE 2 of DV
+*   Setup framework for PING calculation, PING packets, distributing routing tables in DvPackets
 
 Process for Distributing Tasks:
 ------------
