@@ -561,42 +561,5 @@ public class App extends JFrame {
             }                
         }
     }
-
-    private class TextStreamer extends OutputStream {
-        JTextArea txt;
-        StringBuilder buffer;
-        static final int MAX_LENGTH = 100000;   // Maximum length of text area (in characters)
-        public TextStreamer(JTextArea txt) {
-            this.txt = txt;
-            this.buffer = new StringBuilder(256);
-        }
-
-        @Override
-        public void write(int b) throws IOException {
-            char c = (char) b;
-            this.buffer.append(c);
-            if (c == '\n') {
-                // Flush the buffer
-                flush();
-            }
-        }
-
-        @Override
-        public void flush() throws IOException {
-            if (this.buffer.length() > 0) {
-                // Transfer buffer to the TextArea, clear buffer, truncate if needed, and move caret
-                this.txt.append(this.buffer.toString());
-                this.buffer.setLength(0);  // Clear the buffer
-                String fullText = this.txt.getText();
-                int fullLen = fullText.length();
-                if (fullLen > MAX_LENGTH) {
-                    // Truncate (trim about half the text)
-                    String trunc = "..." + fullText.substring(fullLen - MAX_LENGTH/2);
-                    this.txt.setText(trunc);
-                    fullLen = trunc.length();
-                }
-                this.txt.setCaretPosition(fullLen);
-            }                
-        }
-    }
 }
+

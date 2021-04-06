@@ -1,12 +1,12 @@
 public class Main {
-    public static String NETWORK_FILE = "testGraph2.gqu";
+    public static String NETWORK_FILE = "testGraph.gqu";
     
     public static void main(String[] args) {
         String networkFile = NETWORK_FILE;
         if (args.length > 0) {
             networkFile = args[0];
         }
-        Debug.getInstance().setLevel(0);  // Set debug level for more verbose output (higher = more verbose)
+        Debug.getInstance().setLevel(1);  // Set debug level for more verbose output (higher = more verbose)
         
         Network net = new Network();
         try {
@@ -17,7 +17,7 @@ public class Main {
         }
 
         net.printNetwork(System.out);
-        net.createRouters(new LinkStateRouter.Generator());
+        net.createRouters(new FloodRouter.Generator());
         
         try {
             net.runNetwork(System.out, 10000, 100);
