@@ -198,27 +198,14 @@ public class DistanceVectorRouter extends Router {
             
         }
 
-        //debug.println(0, "The Map: " + this.routingMap);
-
-        /*
-        HashMap<Integer,DvPair> tempMap=new HashMap<>();//initialize temp map and add to it 
-        DvPair itself= new DvPair(0,-1);
-        tempMap.put(nsap,itself);
-
-        for ()
         if(nsap==14){ 
-            debug.println(3, "yeah this happened");
-            for(int i=0; i<neighborMaps.size();i++){
-                HashMap<Integer, DvPair> map= neighborMaps.get(i);
-                debug.println(3, "linkIndex: " +i);
-                if(map!=null)
-                    map.forEach((n,dvp) -> debug.println(3,"   "+n+ " "+dvp.distance));
-            }
+            debug.println(0, "Start Routing Table for Router " + nsap + "\n");
+            this.routingMap.forEach((key, value) ->
+            {
+                debug.println(0, "Dest: " + key + ", Best Link: " + value.linkIndex + ", Est Distance: " + value.distance);
+            });
         }
-        else{
-            debug.println(3, "nope try again");
-        }
-        */
+        
         //hashmap to router
         ////special packet w contains map the needs to be sent to the neighboring router 
         //if
