@@ -53,18 +53,25 @@ public class DistanceVectorRouter extends Router {
 
         while (true) {
             currentTime=System.currentTimeMillis();
+            //we'll rebuild the routing table once every second 
+            //each time the table is built, we'll send out new Ping packets, as well as distribute the 
+            //current version of our routing table with our neighbors.
+            //(We won't begin distributing our routing table until we at least have calculated the delay to each
+            //of our neighbors through PING.)
             if(currentTime > timeToRebuild){
                 timeToRebuild = currentTime + delay;
                 buildTable(nsap);
             }
 
-            //route out old packets that we couldn't transmit before
+            //route out old packets that we couldn't transmit before because we had never heard of the 
+            //destination router
             int index = 0;
             while (index < this.transmitQueue.size())
             {
                 int dest = transmitQueue.get(index).dest;
                 if (routingMap.containsKey(dest) && routingMap.get(dest) != null)
                 {
+                    //remove packet from queue if we can route it
                     this.route(transmitQueue.get(index));
                     this.transmitQueue.remove(index);
                 }
@@ -78,12 +85,8 @@ public class DistanceVectorRouter extends Router {
             boolean process = false;
             NetworkInterface.TransmitPair toSend = nic.getTransmit();
             if (toSend != null) {
-                /*
-                if (toSend.data instanceof DistanceVectorRouter.PingPacket) {
-                    DistanceVectorRouter.PingPacket p = (DistanceVectorRouter.PingPacket) toSend.data;
-                    System.out.println(p.sendBack);
-                }
-                */
+               
+                //We set a hop count of 10, so that the packet is discarded if it hasn't reached it's destination after 10 hops
                 Packet p = new Packet(nsap, toSend.destination, 10, toSend.data);
                 if (this.routingMap.containsKey(toSend.destination) && this.routingMap.get(toSend.destination) != null)
                 {
@@ -104,7 +107,7 @@ public class DistanceVectorRouter extends Router {
                 process = true;
                 if(toRoute.data instanceof DvPacket){
                     int linkIndex= getLinkIndex(toRoute.originator);
-                    debug.println(3, nsap +":just a hashmap to neighbor: " +toRoute.originator +" "+linkIndex);
+                    debug.println(3, nsap +":just a hashmap from neighbor: " +toRoute.originator +" "+linkIndex);
                     DvPacket packet=(DvPacket) toRoute.data;
                     neighborMaps.set(linkIndex,packet.mapToSend);
                 }
@@ -115,7 +118,8 @@ public class DistanceVectorRouter extends Router {
                         p.sendBack =true;
                         PingTest(toRoute.originator,p);
                     }
-                   // need to figure out how to use linkindex -- maybe as dylan or harrison 
+                   // the original PING sent out has been returned!
+                   // Let's use it to calculate the delay to the applicable neighbor. 
                     else {
                     	//figure out the distance using the table
                         long startTime = p.time;
@@ -132,14 +136,16 @@ public class DistanceVectorRouter extends Router {
                     if (p.dest == nsap)
                     {
                         // It made it!  Inform the "network" for statistics tracking purposes
-                        debug.println(4, "(FloodRouter.run): Packet has arrived!  Reporting to the NIC - for accounting purposes!");
-                        debug.println(6, "(FloodRouter.run): Payload: " + p.payload);
+                        debug.println(4, "(DistanceVectorRouter.run): Packet has arrived!  Reporting to the NIC - for accounting purposes!");
+                        debug.println(6, "(DistanceVectorRouter.run): Payload: " + p.payload);
                         nic.trackArrivals(p.payload);
                     }
                     else if (p.hopCount > 0)
                     {   
                         p.hopCount --;
                         //we have more routing to do
+                        //Route it now if we are familiar with the destination; Otherwise, add it to a queue
+                        //to process later
                         if (this.routingMap.containsKey(p.dest) && routingMap.get(p.dest) != null)
                         {
                             this.route(p);
@@ -149,6 +155,7 @@ public class DistanceVectorRouter extends Router {
                             this.transmitQueue.add(p);
                         }
                     }
+                    //drop the packet if it has too many hops
                     else
                     {
                         debug.println(5, "Packet has too many hops.  Dropping packet from " + p.source + " to " + p.dest + " by router " + nsap);
@@ -170,7 +177,8 @@ public class DistanceVectorRouter extends Router {
         }
     }
 // use a method within a timer to add a delay 
-//should use a hashmap or arraylist -- possible both to store the values     
+// periodically updates routing table based on currently received routing tables from neighbors   
+// also, sends out new PING requests to neighbors AND shares updated routing table with neighbors (if complete) 
     public void buildTable(int nsap){
     	//create an arraylist of  index and NSAP going out 
         ArrayList<Integer>linkIndex=nic.getOutgoingLinks();
@@ -190,7 +198,6 @@ public class DistanceVectorRouter extends Router {
                 {
                     if (!this.routingMap.containsKey(destId) || this.routingMap.get(destId) == null || this.routingMap.get(neighborId).distance + valuePair.distance < this.routingMap.get(destId).distance)
                     {
-
                         this.routingMap.put(destId, new DvPair(this.routingMap.get(neighborId).distance + valuePair.distance, link));
                     }
                 });
@@ -198,6 +205,7 @@ public class DistanceVectorRouter extends Router {
             
         }
 
+        //Used for debugging purposes
         if(nsap==14){ 
             debug.println(0, "Start Routing Table for Router " + nsap + "\n");
             this.routingMap.forEach((key, value) ->
@@ -208,12 +216,14 @@ public class DistanceVectorRouter extends Router {
         
         //hashmap to router
         ////special packet w contains map the needs to be sent to the neighboring router 
-        //if
+        
+        //Do not share the routingTable unless it at least has calculated distances for all immediate neighbors
         boolean sendMap = true;
         for(int i=0;i<linkIndex.size();i++){
             if (this.routingMap.get(linkIndex.get(i)).distance == Integer.MAX_VALUE)
             {
                 sendMap = false;
+                break;
             }
         }
         if (sendMap)
@@ -280,7 +290,8 @@ public class DistanceVectorRouter extends Router {
         ArrayList<Integer> outLinks = nic.getOutgoingLinks();
         nic.sendOnLink(link, p);
     }
-//not mine
+
+//Tim and Ryan: Route PING packet only to the specified neighbor destination
     public void PingTest(int dest, PingPacket PP) {
          ArrayList<Integer> outGo = nic.getOutgoingLinks();
          int size = outGo.size();
